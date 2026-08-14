@@ -1,0 +1,35 @@
+# ---- Node ----
+node_modules/
+
+# ---- Runtime & user data (all regenerated automatically on first run) ----
+# Copyrighted books you drop in — never commit these.
+books/*
+!books/.gitkeep
+
+# Per-model translation cache.
+work/*
+!work/.gitkeep
+
+# Produced EPUB / DOCX / PDF outputs.
+out/*
+!out/.gitkeep
+
+# Runtime state: job state, request/issues logs, glossary, settings, prompts.
+# Each lib recreates its file with defaults when missing (see lib/settings.js,
+# lib/prompts.js, lib/glossary.js, lib/jobs.js, lib/logger.js).
+data/*
+!data/.gitkeep
+
+# ---- Logs ----
+*.log
+
+# ---- Editor / OS cruft ----
+*.swp
+*.swo
+.DS_Store
+.idea/
+.vscode/
+
+# ---- Secrets ----
+.env
+.env.*

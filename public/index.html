@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Fountain Dashboard</title>
+  <link rel="stylesheet" href="css/theme.css">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div class="sticky-head">
+  <header class="topbar">
+    <div class="brand">
+      <h1>The Fountain</h1>
+      <span class="tagline">EPUB → Persian · local Ollama</span>
+    </div>
+    <div class="controls">
+      <label class="field">Book
+        <select id="bookSel"></select>
+      </label>
+      <label class="field">Model
+        <select id="modelSel"></select>
+      </label>
+      <label class="field">Prompt
+        <select id="promptSel"></select>
+      </label>
+      <button id="editPrompt" class="btn ghost" title="Edit prompts" type="button">✎</button>
+      <button id="glossaryBtn" class="btn ghost" title="Name glossary" type="button">Names</button>
+      <label class="field">Format
+        <select id="formatSel">
+          <option value="epub">EPUB</option>
+          <option value="docx">Word (.docx)</option>
+          <option value="pdf">PDF</option>
+        </select>
+      </label>
+      <label class="switch" title="Skip the model's reasoning phase (much faster)">
+        <input type="checkbox" id="noThink" checked> Disable reasoning
+      </label>
+      <button id="startBtn" class="btn primary" type="button">Start</button>
+      <button id="stopBtn" class="btn danger" type="button" disabled>Stop</button>
+    </div>
+  </header>
+
+  <section class="rangebar">
+    <span class="range-label">Range</span>
+    <input type="number" id="fromPage" min="1" placeholder="from page">
+    <span class="dash">—</span>
+    <input type="number" id="toPage" min="1" placeholder="to page">
+    <span class="range-hint">blank = whole book · ~250 words/page</span>
+    <button id="wholeBtn" class="chip-btn" type="button">Whole book</button>
+    <span class="range-sep"></span>
+    <label class="setfield" title="How many requests run in parallel (1 = strictly one at a time). Recommended 2 — an 8 GB GPU handles about two 8B requests at once; Ollama queues the rest.">
+      <span>Concurrent</span><input type="number" id="concInput" min="1" max="8" step="1"><em class="rec">rec. 2</em>
+    </label>
+    <label class="setfield" title="Bundles whole paragraphs into one request up to this many words. Sentences are never split — 1 = one paragraph per request, 150 ≈ a few sentences, 500 = old batched style.">
+      <span>Words/request</span><input type="number" id="wprInput" min="1" max="1000" step="1"><em class="rec">rec. 150</em>
+    </label>
+    <span id="settingsSaved" class="range-hint saved" hidden>saved</span>
+    <label class="switch" title="Auto-scroll to the newest request; uncheck to scroll freely while translating">
+      <input type="checkbox" id="follow" checked> Follow
+    </label>
+  </section>
+
+  <section class="statsbar">
+    <div class="stat progress-stat">
+      <span class="stat-label">Progress</span>
+      <div class="progressbar"><div id="progressFill"></div></div>
+      <span id="progressPct" class="stat-value">0%</span>
+    </div>
+    <div class="stat"><span class="stat-label">Words</span><span id="statWords" class="stat-value">0 / 0</span></div>
+    <div class="stat"><span class="stat-label">Speed</span><span id="statWpm" class="stat-value">—</span></div>
+    <div class="stat"><span class="stat-label">ETA</span><span id="statEta" class="stat-value">—</span></div>
+    <div class="stat"><span class="stat-label">Chapter</span><span id="statFile" class="stat-value">—</span></div>
+    <div class="stat">
+      <span class="stat-label">Needs review</span>
+      <span id="statIssues" class="stat-value issue-count">0</span>
+      <button id="fixBtn" class="btn mini" type="button" disabled>Fix</button>
+      <button id="clearIssuesBtn" class="btn mini" type="button" disabled title="Clear the review state to start completely fresh">Clear</button>
+    </div>
+    <div class="stat"><span class="stat-label">Output</span><span id="statOut" class="stat-value">—</span></div>
+    <div class="stat"><span class="stat-label">Status</span><span id="statStatus" class="stat-value status"><span class="dot"></span> idle</span></div>
+  </section>
+
+  <div id="resumeBanner" class="resume-banner" hidden>
+    <span class="resume-text"></span>
+    <button id="resumeBtn" class="btn primary mini" type="button">Resume</button>
+    <button id="dismissBanner" class="btn ghost mini" type="button">Dismiss</button>
+  </div>
+  </div><!-- /sticky-head -->
+
+  <main class="main">
+    <section id="feed" class="feed" aria-live="polite"></section>
+
+    <aside id="promptPanel" class="prompt-panel" hidden>
+      <div class="panel-head">
+        <h2>Prompts</h2>
+        <button id="closePrompt" class="btn ghost" type="button">✕</button>
+      </div>
+      <div class="panel-versions">
+        <select id="promptVersionSel"></select>
+        <button id="newPrompt" class="btn mini" type="button">New</button>
+        <button id="deletePrompt" class="btn mini danger" type="button">Delete</button>
+      </div>
+      <label class="pfield">Name <input id="pName" type="text"></label>
+      <label class="pfield">System prompt <textarea id="pSystem" rows="3"></textarea></label>
+      <label class="pfield">Rules — one per line <textarea id="pRules" rows="7"></textarea></label>
+      <div class="prow">
+        <label class="pfield">Temp <input id="pTemp" type="number" step="0.1" min="0" max="2"></label>
+        <label class="pfield">Context <input id="pCtx" type="number" min="2048" step="1024"></label>
+      </div>
+      <div class="prow">
+        <label class="switch"><input id="pGlossary" type="checkbox"> Glossary</label>
+        <label class="pfield">Top-N names <input id="pGlossLimit" type="number" min="0" max="100"></label>
+      </div>
+      <div class="panel-actions">
+        <button id="savePrompt" class="btn primary" type="button">Save</button>
+        <span id="promptSaved" class="saved-hint"></span>
+      </div>
+    </aside>
+
+    <aside id="glossaryPanel" class="prompt-panel" hidden>
+      <div class="panel-head">
+        <h2>Name glossary</h2>
+        <button id="closeGlossary" class="btn ghost" type="button">✕</button>
+      </div>
+      <p class="panel-note">
+        These Persian forms are sent with every batch and saved to
+        <code>app/data/glossary.json</code> — they survive restarts. Edit any value;
+        ★ marks names you've set yourself (always included). Auto-built names are
+        included by frequency up to the prompt's top-N.
+      </p>
+      <div class="panel-versions">
+        <input type="search" id="glossarySearch" class="psearch" placeholder="filter names…">
+        <button id="autobuildBtn" class="btn mini primary" type="button">Auto-build</button>
+      </div>
+      <div class="glossary-add">
+        <input id="gAddEn" type="text" placeholder="English name">
+        <input id="gAddFa" type="text" placeholder="Persian form">
+        <button id="gAddBtn" class="btn mini" type="button">Add</button>
+      </div>
+      <div id="glossaryList" class="glossary-list"></div>
+    </aside>
+  </main>
+
+  <footer class="foot">
+    Start a translation and every request appears here the moment it's sent — Persian
+    streams in live, then settles into English / Persian pairs. A stopped job resumes
+    from where it left off;
+    <button id="rawToggle" class="link-btn" type="button">request log</button>
+    <span class="foot-sep">·</span>
+    <button id="resetBtn" class="link-btn danger-link" type="button">reset book</button>
+  </footer>
+
+  <section id="rawPanel" class="rawpanel" hidden>
+    <div class="rawhead">
+      <span>Request log — every Ollama call</span>
+      <button id="closeRaw" class="btn mini" type="button">✕</button>
+    </div>
+    <pre id="rawlog" class="rawlog"></pre>
+  </section>
+
+  <script src="js/api.js"></script>
+  <script src="js/stream.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

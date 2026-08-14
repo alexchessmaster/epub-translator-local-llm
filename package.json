@@ -1,0 +1,15 @@
+{
+  "name": "fountain-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Fountain — EPUB → Persian translation dashboard powered by local Ollama",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
+  }
+}
