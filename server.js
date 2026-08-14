@@ -18,6 +18,7 @@ const { GlossaryStore } = require('./lib/glossary');
 const { SettingsStore } = require('./lib/settings');
 const { JobManager } = require('./lib/jobs');
 const { runFix, loadIssues } = require('./lib/fixer');
+const { fixParagraph, rebuildOutputs } = require('./lib/editor');
 const { extractNames, buildGlossary } = require('./lib/translator');
 const sse = require('./lib/sse');
 
@@ -319,6 +320,51 @@ app.post('/api/fix', wrap(async (req, res) => {
   } finally {
     fixing = false;
   }
+}));
+
+// ---- per-paragraph fixes from the dashboard ----
+// body: { book, file, src, cacheModel, targetLang?, sourceLang?, promptId, think?, tgt?, model? }
+//   tgt provided → manual save; else re-translate `src` with `model`.
+//   cacheModel = the model the card was translated with (which cache to patch).
+app.post('/api/paragraph/fix', wrap(async (req, res) => {
+  const { book, file, src, cacheModel, targetLang, sourceLang, promptId, think, tgt, model } = req.body || {};
+  if (!book || !file || !src || !cacheModel) return res.status(400).json({ error: 'book, file, src and cacheModel are required' });
+  const bookPath = safeJoin(BOOKS, book);
+  if (!bookPath || !fs.existsSync(bookPath)) return res.status(400).json({ error: 'book not found' });
+  const prompt = promptId ? prompts.get(promptId) : null;
+  if (!prompt) return res.status(400).json({ error: 'prompt not found' });
+  if (tgt == null && !model) return res.status(400).json({ error: 'provide tgt to save manually, or model to re-translate' });
+  const s = settings.get();
+  const srcLang = sourceLang || s.sourceLang || 'en';
+  const tgtLang = targetLang || s.targetLang || 'fa';
+
+  const bookData = await epub.readEpub(bookPath);
+  const result = await fixParagraph({
+    bookData,
+    file,
+    src,
+    model,
+    cacheModel,
+    sourceLang: srcLang,
+    targetLang: tgtLang,
+    provider: getProvider(settings),
+    prompt,
+    think: !!think,
+    manualTgt: typeof tgt === 'string' ? tgt : null,
+    workDir: WORK,
+    issues: issuesLog,
+  });
+  // Rebuild the output book(s) from the cache so the fix lands in the file the
+  // user downloads.
+  const rebuilt = await rebuildOutputs({
+    bookData,
+    bookName: path.basename(bookPath),
+    model: cacheModel,
+    targetLang: tgtLang,
+    workDir: WORK,
+    outDir: OUT,
+  });
+  res.json({ ok: true, tgt: result.tgt, files: rebuilt.files });
 }));
 
 // ---- outputs ----

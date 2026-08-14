@@ -43,6 +43,7 @@ const API = (() => {
     issues: () => get('/api/issues'),
     clearIssues: () => fetch('/api/issues/clear', { method: 'POST' }).then((r) => r.json()),
     fix: (cfg) => post('/api/fix', cfg),
+    fixParagraph: (cfg) => post('/api/paragraph/fix', cfg),
     outList: () => get('/api/out'),
     getLog: async () => {
       const r = await fetch('/api/log');
