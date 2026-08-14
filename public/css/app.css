@@ -144,19 +144,18 @@
 .pair { display: grid; grid-template-columns: 26px minmax(0, 1fr) minmax(0, 1.2fr); gap: 12px; padding: 10px 13px; }
 .pair + .pair { border-top: 1px dashed var(--line); }
 .pair .num { font-family: var(--font-mono); font-size: 10.5px; color: var(--accent); border: 1px solid var(--line); border-radius: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; align-self: start; margin-top: 2px; }
-/* English LEFT, Persian RIGHT — two-column bilingual row */
-.pair .en { color: var(--en); font-size: 12.5px; line-height: 1.5; padding-right: 12px; border-right: 1px solid var(--line); text-align: left; direction: ltr; }
-.pair .fa { direction: rtl; text-align: right; font-family: var(--font-fa); font-size: 16.5px; line-height: 1.75; color: var(--text); }
-.pair .fa.inflight { color: var(--text-faint); font-style: italic; }
-.pair .fa.inflight::after { content: "▍"; margin-inline-start: 3px; color: var(--gold); animation: blink 1.1s steps(2,start) infinite; }
+/* source LEFT, target RIGHT — two-column bilingual row */
+.pair .src { color: var(--src); font-size: 12.5px; line-height: 1.5; padding-right: 12px; border-right: 1px solid var(--line); text-align: left; direction: ltr; }
+.pair .tgt { font-size: 16.5px; line-height: 1.75; color: var(--text); } /* dir/font/text-align set inline from the target language */
+.pair .tgt.inflight { color: var(--text-faint); font-style: italic; }
+.pair .tgt.inflight::after { content: "▍"; margin-inline-start: 3px; color: var(--gold); animation: blink 1.1s steps(2,start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
-.pair .fa.kept { color: var(--danger); font-style: normal; font-size: 12px; }
+.pair .tgt.kept { color: var(--danger); font-style: normal; font-size: 12px; }
 
 /* live stream box (raw tokens as they arrive) */
 .streambox {
   margin: 0 13px 12px; padding: 9px 12px; border-radius: 8px;
   background: var(--bg); border: 1px dashed var(--line);
-  direction: rtl; text-align: right; font-family: var(--font-fa);
   font-size: 15px; line-height: 1.7; color: var(--text-dim);
   white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow-y: auto;
 }
@@ -219,8 +218,36 @@
 .glossary-add input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; }
 .glossary-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .gloss-row { display: grid; grid-template-columns: 1fr 1.5fr auto; gap: 6px; align-items: center; }
-.gloss-en { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gloss-fa { direction: rtl; font-family: var(--font-fa); background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 14px; }
+.gloss-src { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gloss-tgt { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 14px; } /* dir/font inline from target language */
+
+/* ---- settings modal ---- */
+.settings-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(5, 10, 11, 0.62);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.settings-overlay[hidden] { display: none; }
+.settings-modal {
+  width: min(560px, 100%); max-height: 86vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow); padding: 18px 20px 22px;
+  display: flex; flex-direction: column; gap: 18px;
+}
+.settings-modal .panel-head { flex: none; }
+.settings-modal .pfield select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 13px; width: 100%; }
+.sgroup { display: flex; flex-direction: column; gap: 8px; }
+.sgroup h3 { margin: 0; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); }
+.badge {
+  display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  border: 1px dashed var(--accent); color: var(--accent);
+}
+.badge.danger { border-color: var(--danger); color: var(--danger); }
+
+/* language pickers in the range bar */
+.langpick { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); }
+.langpick select { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 13px; text-transform: none; letter-spacing: 0; }
+.lang-arrow { color: var(--accent); font-weight: 700; }
 
 /* ---- footer ---- */
 .foot { border-top: 1px solid var(--line); background: var(--surface); color: var(--text-faint); font-size: 11.5px; padding: 8px 18px; }

@@ -1,93 +1,243 @@
-# The Fountain — Translation Dashboard
+# The Fountain — EPUB translation dashboard
 
-A Node.js dashboard that translates an EPUB to Persian (Farsi) with your local
-Ollama models — pick a book, pick a model, press Start, and watch every request
-stream in live: the sentence being translated, the Persian typing in as the model
-generates, the timing of each call, the overall percentage, and a speed/ETA.
+A self-hosted web dashboard that translates an EPUB book into **any language pair**
+via a local **Ollama** model or **any OpenAI-compatible API** (OpenAI, DeepSeek,
+Groq, OpenRouter, Together, Mistral, …). Pick a book, pick a model, pick a word
+range — the app streams the translation live to the browser (source left, target
+right, typing in as tokens arrive), shows progress / speed / ETA, and produces a
+translated EPUB (optionally DOCX or PDF).
 
-```
+Everything runs on your own machine or server; nothing leaves it except the
+requests to whichever LLM provider you configure.
+
+---
+
+## Prerequisites
+
+> **Node.js ≥ 18** (Express 5 requires it). Check with `node --version`.
+
+You also need one of these:
+
+- **Ollama** (local, free, offline) — install from [ollama.com](https://ollama.com),
+  then pull a model, e.g. `ollama pull aya-expanse:8b`. The app lists every model
+  you've pulled.
+- **An OpenAI-compatible API key** — OpenAI, DeepSeek, Groq, OpenRouter, Together,
+  Mistral, or Ollama's own `http://localhost:11434/v1` endpoint.
+
+**Optional:**
+
+- **Google Chrome** — needed only for PDF export (rendered by headless Chrome).
+- **Fonts** for the target language (e.g. Noto Naskh Arabic for Persian). DOCX/EPUB
+  work without them; Word/browser fonts fall back gracefully.
+
+---
+
+## Install & run
+
+```bash
 cd app
 npm install
-node server.js          # → http://localhost:8765
+node server.js
 ```
 
-## What you can do from the UI
+Open `http://localhost:8765` (or the host/port you configure — see below).
 
-- **Choose a book** — drop `.epub` files into `app/books/`.
-- **Choose a model** — every local Ollama model is listed with size/quantization.
-- **Disable reasoning** — sends `think:false` for qwen3/deepseek-style models
-  (dramatically faster; no reasoning tokens).
-- **Translate any range** — whole book, or "only page 12", or pages 12–13
-  (~250 words/page). Blank = whole book.
-- **Choose the output format** — EPUB (native), Word `.docx` (built directly,
-  RTL paragraphs), or PDF (rendered by headless Chrome with Noto Naskh Arabic,
-  so Persian shapes correctly).
-- **Watch it live** — a card appears the instant a request is sent, the Persian
-  streams in as tokens arrive, then settles into clean English / Persian pairs
-  with the duration of that call.
-- **Progress + ETA** — percentage, words done/total, words/min, and a live ETA.
-- **Versioned prompts** — ✎ opens the editor: create, edit, save, delete prompt
-  presets (system prompt, rules, temperature, **paragraphs/request**, glossary
-  top-N). Stored in `app/data/prompts.json`.
-- **Persistent settings (in the range bar)** — **Concurrent** (how many requests
-  run in parallel) and **Words/request** (bundle whole paragraphs until this many
-  words; sentences are never split). Changed values save automatically to
-  `app/data/settings.json` and survive restarts. The UI shows the recommended
-  defaults (`rec.` badges): **Concurrent 2**, **Words/request 150**.
-  - `Words/request = 1` → each paragraph is its own request; the model streams
-    plain Persian straight into that paragraph's line (`loading…` until it types in).
-  - `Words/request = 300–500` → the old batched behavior (paragraphs fill together).
-  - `Concurrent = 2–8` → several requests in flight at once (faster, less calm).
-- **Name glossary (persistent)** — **Names** opens an editor for the
-  proper-noun → Persian map (e.g. `Janet → جَنِت`). Edit any value, add or remove
-  names, or press **Auto-build** to extract the book's names and transliterate the
-  missing ones. Saved to `app/data/glossary.json` — it survives restarts. Names you
-  set yourself (marked ★) are always sent in every translation prompt; auto-built
-  names fill the rest by frequency up to the prompt's top-N.
-- **Stop / Resume** — Stop aborts the current request; the next Start (or the
-  Resume banner) continues from where it left off.
-- **Fix pass** — if the model botched any paragraph, a "Needs review" count
-  appears; **Fix** re-translates exactly those into `<book>_fa_v2.epub`.
-- **Reset book** — the footer's **reset book** wipes all book memory
-  (translations in `app/work/`, the name glossary, request/issue logs, outputs,
-  and saved job state) so you can start completely over. Global settings and
-  prompt presets are kept.
+The server reads its host/port from **⚙ Settings → Server** (`data/settings.json`).
+Changes take effect on the next start. `PORT` and `HOST` environment variables
+override the saved values at boot, which is the standard way to set this when
+deploying (systemd, Docker, a remote VPS):
 
-## How it stays durable
+```bash
+HOST=0.0.0.0 PORT=9000 node server.js   # bind all interfaces on port 9000
+```
 
-- Every completed batch is written to `app/work/<model>__<chapter>.xhtml`.
-  A power loss / machine restart loses at most the single in-flight request —
-  the next run re-translates only paragraphs that are still English and reuses
-  everything already done.
-- `app/data/state.json` records job progress, so a restart shows a
-  "Resume previous job" banner with the exact percent and last file.
-- `app/data/requests.log` keeps two lines per Ollama call (request before send,
-  response after, shared id, `duration_ms`), rolled at ~5MB.
-- `app/data/issues.log` records every kept-English paragraph with the English
-  source and the model's output — the input to the Fix pass.
+> Default host is `0.0.0.0`, which exposes the dashboard to your LAN. For a
+> local-only setup, set the host to `127.0.0.1`.
 
-## API (for scripting)
+---
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/books` / `GET /api/models` | list books / Ollama models |
-| `GET/POST/PUT/DELETE /api/prompts[/:id]` | prompt presets CRUD |
-| `POST /api/translate/start` | `{book, model, promptId, think, fromPage?, toPage?, fromWord?, toWord?, format?}` · format = `epub` \| `docx` \| `pdf` |
-| `POST /api/translate/stop` · `GET /api/translate/status` | control + status |
-| `GET /api/log` · `GET /api/issues` | raw request log / issues |
-| `POST /api/fix` | run the fix pass → `<book>_fa_v2.epub` |
-| `GET /events` | SSE stream of `request/token/response/progress/done/…` |
+## Configure (the ⚙ Settings panel)
 
-## Files
+Open the dashboard and click **⚙ Settings**. Everything here is persisted in
+`app/data/settings.json` (gitignored — your API key stays local) and survives
+restarts.
 
-- `server.js` — Express app + API + SSE.
-- `lib/ollama.js` — model list + streaming chat (`format:json`, `think`).
-- `lib/epub.js` — EPUB read/write with a byte-preserving XHTML extractor
-  (placeholder tokens keep inline markup intact).
-- `lib/translator.js` — the job engine: ranges, batching, recursive retry,
-  chapter cache, progress/ETA.
-- `lib/jobs.js` — single active job, abort, durable `state.json`.
-- `lib/fixer.js` — the Fix pass.
-- `lib/export.js` — DOCX (hand-built, no deps) and PDF (headless Chrome) output.
-- `public/` — the dashboard (vanilla JS, no build step).
+### Server
+- **Host / Port** — where the dashboard binds. Applies on the next server start;
+  `PORT`/`HOST` env vars override the saved values (a badge tells you when).
 
+### LLM provider
+- **Type** — `Ollama (local)` or `OpenAI-compatible`.
+- **Base URL** — auto-filled when you switch provider. Common values:
+
+  | Provider | Base URL |
+  |---|---|
+  | Ollama (local) | `http://localhost:11434` |
+  | OpenAI | `https://api.openai.com/v1` |
+  | DeepSeek | `https://api.deepseek.com/v1` |
+  | Groq | `https://api.groq.com/openai/v1` |
+  | OpenRouter | `https://openrouter.ai/api/v1` |
+  | Together | `https://api.together.xyz/v1` |
+  | Mistral | `https://api.mistral.ai/v1` |
+  | Ollama's OpenAI endpoint | `http://localhost:11434/v1` |
+
+- **API key** — only needed for OpenAI-compatible providers. Alternatively set the
+  `LLM_API_KEY` environment variable; it takes precedence over the stored key, so
+  the key never has to live in a file.
+- **Test connection** — pings the provider and reports how many models it can see,
+  before you save.
+
+### Language
+- **Source** and **Target** — from a curated list of ~30 languages. They must
+  differ. The same pair is also shown as quick selects in the header range bar.
+
+The **Concurrent** and **Words/request** knobs stay in the range bar (they're also
+persisted). `Ollama`-only features (e.g. **Disable reasoning**) are hidden when a
+non-Ollama provider is selected.
+
+Other env overrides: `OLLAMA_HOST` / `LLM_BASE_URL` set the provider base URL at
+startup, and `LLM_API_KEY` sets the key.
+
+---
+
+## Use it
+
+1. Drop `.epub` files into `app/books/`.
+2. Pick the **book**, **model**, and **prompt** in the header.
+3. Set the **source → target** languages (default English → Persian).
+4. Optionally restrict the range — "only page 12", or pages 12–13 (~250
+   words/page). Blank = whole book.
+5. Press **Start**. Every request appears as a card the moment it's sent, with the
+   target text streaming in live, then settling into clean source / target pairs.
+6. Choose the output **format**: EPUB (native), Word `.docx`, or PDF.
+
+Output files land in `app/out/` as `<book>_<lang>.epub` (e.g. `Book_fa.epub` for
+Persian, `Book_fr.epub` for French) and are linked in the stats bar.
+
+---
+
+## Durability & resume
+
+A stopped job resumes from where it left off — even across machine restarts.
+
+- After every completed request the translated chapter is written to
+  `app/work/<model>__<targetLang>__<chapter>.xhtml`. On the next run, blocks marked
+  `data-t="1"` (already translated) are reused as-is. The marker makes resume exact
+  even for **same-script pairs** (e.g. English→French) where a script heuristic
+  can't tell source from target.
+- `app/data/state.json` records the job, and the resume banner in the UI restores
+  the book/model/language/range for you.
+- Switching the model or target language re-translates (the cache key includes
+  both). After upgrading from an older version, the first run re-translates from
+  scratch because old cache keys no longer match — that's expected.
+
+## The glossary (proper names)
+
+The **Names** panel holds a persistent source-name → target-form map. Names you add
+yourself (★) are always included in the prompt; **Auto-build** extracts capitalized
+proper nouns from the book and transliterates the missing ones with one model call,
+then keeps them consistent across every request. Auto-build needs a cased script
+(Latin, Cyrillic); for case-less scripts (Arabic, Hebrew, CJK, …) add names
+manually.
+
+---
+
+## Architecture
+
+```
+Browser (vanilla JS SPA, public/)
+   │  EventSource /events (SSE)
+   ▼
+server.js  (Express: static, REST API, SSE hub, host/port from settings)
+   │
+   ├── lib/providers.js      → provider factory (ollama | openai-compatible)
+   │   ├── lib/providers/ollama.js   (native /api/tags + /api/chat, NDJSON)
+   │   └── lib/providers/openai.js   (OpenAI-compatible /v1, SSE streaming)
+   ├── lib/languages.js      → ~30-language registry + script detection + fonts
+   ├── lib/translator.js     → the job engine (scan → glossary → translate → export)
+   ├── lib/epub.js           → read EPUB, extract translatable XHTML, rebuild EPUB
+   ├── lib/jobs.js           → single active job, AbortController, durable state.json
+   ├── lib/prompts.js        → versioned prompt presets (data/prompts.json)
+   ├── lib/glossary.js       → persistent name → form map (data/glossary.json)
+   ├── lib/settings.js       → persistent settings (data/settings.json)
+   ├── lib/logger.js         → rolling JSONL logs (requests.log, issues.log)
+   ├── lib/sse.js            → SSE client registry + broadcast
+   ├── lib/fixer.js          → re-translate "kept source" paragraphs → _v2.epub
+   └── lib/export.js         → DOCX (hand-built zip) + PDF (headless Chrome)
+```
+
+Design notes:
+
+- **One paragraph per request is the default.** A paragraph is 1–3 sentences — the
+  chunk you can follow — and plain-text streaming makes the translation type in
+  live in that paragraph's line. Multi-paragraph batching (`Words/request ≥ 300`)
+  is opt-in; those fill together as JSON.
+- **Inline markup stays intact.** Before translating, inline elements (`<i>`, `<a>`,
+  page-break spans) are replaced with placeholder tokens (`⟦s0⟧`, `⟦e0⟧`, `⟦1⟧`).
+  The model must keep them in the translation; they're swapped back to raw markup
+  afterwards. A dropped token is logged to the issues log for the Fix pass.
+- **No Python, no build step.** Vanilla JS + 3 dependencies (`express`, `yauzl`,
+  `yazl`). `npm install && node server.js` is all it takes.
+
+---
+
+## REST API (all JSON unless noted)
+
+- `GET /api/books` · `GET /api/models` (from the configured provider) ·
+  `GET /api/languages`
+- `POST /api/providers/test` `{provider, baseUrl, apiKey}` — test a connection
+  without saving
+- `GET|POST|PUT|DELETE /api/prompts[/:id]`
+- `GET /api/glossary` · `POST /api/glossary {src,tgt}` · `PUT/DELETE /api/glossary/:src` ·
+  `POST /api/glossary/autobuild`
+- `GET /api/settings` (includes `effective` config + env badges) ·
+  `PUT /api/settings` (provider, baseUrl, apiKey, host, port, sourceLang, targetLang,
+  concurrency, wordsPerRequest)
+- `POST /api/translate/start` `{book, model, promptId, think, fromPage/toPage or
+  fromWord/toWord, format, sourceLang?, targetLang?}` ·
+  `POST /api/translate/stop` · `GET /api/translate/status`
+- `GET /api/log` (raw requests.log) · `GET /api/issues` · `POST /api/issues/clear` ·
+  `POST /api/fix`
+- `POST /api/reset` (wipe translations, glossary, logs, outputs, state; keeps
+  settings/prompts)
+- `GET /events` (SSE) · `GET /api/out` · `GET /api/out/:name`
+
+---
+
+## Troubleshooting
+
+- **"provider offline"** — the app can't reach the provider. Check the base URL
+  and (for OpenAI-compatible) the API key in ⚙ Settings, then **Test connection**.
+  For Ollama, make sure the Ollama server is running (`ollama serve`).
+- **HTTP 400 mentioning `response_format`** on an OpenAI-compatible provider — some
+  providers reject structured JSON output. The app retries without it, but tell
+  your provider you need JSON mode if batches keep failing.
+- **Same-script pair (e.g. English→French)** — resume works via the `data-t`
+  markers; you don't need to do anything.
+- **Host/port won't change** — a `PORT`/`HOST` env var is overriding the saved
+  values (the settings panel shows a badge). Restart with those unset to use the
+  panel values.
+- **PDF export fails** — Chrome isn't installed, or the target script's font isn't
+  present. Install Chrome; EPUB/DOCX still work without it.
+- **First run after an upgrade re-translates everything** — the cache key now
+  includes the target language, so old `work/` files are ignored. Expected once.
+
+---
+
+## Development notes
+
+Backend/flow test:
+
+```bash
+POST /api/issues/clear
+rm -f work/*.xhtml
+# POST /api/translate/start with a small range, e.g. {book, model, promptId, fromWord: 2250, toWord: 2450}
+# Inspect data/requests.log: every request should have a request + response phase.
+```
+
+Streaming: `curl -s -N http://localhost:8765/events` shows `token` deltas of plain
+target-language text. Output: `unzip -t app/out/*.epub`; verify `lang="<target>"`
+and (for RTL targets) `dir="rtl"` on `<html>`.
+
+Do not run long test translations on a live dashboard the user is driving — stop
+the job before testing.

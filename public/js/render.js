@@ -1,6 +1,6 @@
 // render.js — build cards for the live feed. All untrusted text goes through
 // textContent; nothing ever reaches innerHTML. Cards morph in place:
-//   sent (pending) → translating… (tokens stream in) → done (EN/FA pairs)
+//   sent (pending) → translating… (tokens stream in) → done (source/target pairs)
 
 const Render = (() => {
   function el(tag, cls, text) {
@@ -31,7 +31,41 @@ const Render = (() => {
     return String(text || '').replace(/⟦[se]?\d+⟧/g, '');
   }
 
-  // Turn raw streamed JSON fragments into readable Persian lines.
+  // Per-script CSS font stacks (mirrors lib/languages.js) for the target column.
+  const FONTS = {
+    arabic: '"Noto Naskh Arabic","Noto Sans Arabic","Vazirmatn","Tahoma",sans-serif',
+    latin: 'Georgia,"Times New Roman",serif',
+    cyrillic: '"Noto Serif","DejaVu Serif","PT Serif",serif',
+    cjk: '"Noto Serif CJK SC","Noto Sans CJK SC","Songti SC",serif',
+    hebrew: '"Noto Sans Hebrew","David",serif',
+    devanagari: '"Noto Sans Devanagari","Mangal",serif',
+    greek: '"Noto Serif","DejaVu Serif",serif',
+    thai: '"Noto Sans Thai","Tahoma",sans-serif',
+    hangul: '"Noto Serif KR","Malgun Gothic",serif',
+  };
+  function fontFor(script) { return FONTS[script] || FONTS.latin; }
+
+  // Language metadata registry, populated at boot from /api/languages:
+  //   { code: { dir, script } }. Unknown codes fall back to a Persian-like RTL.
+  let LANGS = {};
+  function setLangs(list) {
+    LANGS = {};
+    (list || []).forEach((l) => { LANGS[l.code] = l; });
+  }
+  function langMeta(code) {
+    return LANGS[code] || { code, dir: 'rtl', script: 'arabic' };
+  }
+
+  // Apply direction, language and font to the target-text element.
+  function applyTarget(el, targetLang) {
+    const meta = langMeta(targetLang || 'fa');
+    el.lang = targetLang || 'fa';
+    el.dir = meta.dir;
+    el.style.fontFamily = fontFor(meta.script);
+    el.style.textAlign = meta.dir === 'rtl' ? 'right' : 'left';
+  }
+
+  // Turn raw streamed JSON fragments into readable translated lines.
   function prettyStream(raw) {
     return String(raw || '')
       .replace(/[{}]/g, '')
@@ -59,11 +93,10 @@ const Render = (() => {
     ev.paragraphs.forEach((p, i) => {
       const row = el('div', 'pair');
       row.appendChild(el('span', 'num', String(i + 1)));
-      row.appendChild(el('div', 'en', clean(p)));
-      const fa = el('div', 'fa inflight', 'loading…');
-      fa.dir = 'rtl';
-      fa.lang = 'fa';
-      row.appendChild(fa);
+      row.appendChild(el('div', 'src', clean(p)));
+      const tgt = el('div', 'tgt inflight', 'loading…');
+      applyTarget(tgt, ev.targetLang || 'fa');
+      row.appendChild(tgt);
       pairs.appendChild(row);
     });
 
@@ -103,8 +136,8 @@ const Render = (() => {
   }
 
   // Route streamed tokens to the paragraph they belong to.
-  // Single-paragraph cards stream plain Persian; multi-paragraph cards parse the
-  // streaming JSON and type each paragraph's text into its line.
+  // Single-paragraph cards stream plain target text; multi-paragraph cards parse
+  // the streaming JSON and type each paragraph's text into its line.
   function appendStream(card, delta) {
     card.classList.remove('pending');
     card.classList.add('streaming');
@@ -115,11 +148,11 @@ const Render = (() => {
     }
 
     if (card.dataset.single === '1') {
-      const fa = card.querySelector('.pair .fa');
-      if (!fa) return;
-      if (fa.textContent === 'loading…') fa.textContent = '';
-      fa.classList.remove('inflight');
-      fa.textContent += delta;
+      const tgt = card.querySelector('.pair .tgt');
+      if (!tgt) return;
+      if (tgt.textContent === 'loading…') tgt.textContent = '';
+      tgt.classList.remove('inflight');
+      tgt.textContent += delta;
       return;
     }
 
@@ -127,12 +160,12 @@ const Render = (() => {
     card._buf = (card._buf || '') + delta;
     const n = parseInt(card.dataset.n || card.querySelectorAll('.pair').length, 10);
     const texts = extractPartial(card._buf, n);
-    card.querySelectorAll('.pair .fa').forEach((fa, i) => {
+    card.querySelectorAll('.pair .tgt').forEach((tgt, i) => {
       const t = texts[i + 1];
       if (t != null) {
-        if (fa.textContent === 'loading…') fa.textContent = '';
-        fa.classList.remove('inflight');
-        fa.textContent = t;
+        if (tgt.textContent === 'loading…') tgt.textContent = '';
+        tgt.classList.remove('inflight');
+        tgt.textContent = t;
       }
     });
   }
@@ -148,19 +181,19 @@ const Render = (() => {
     const dur = card.querySelector('.dur');
     if (dur && ev.durationMs != null) dur.textContent = fmtDur(ev.durationMs);
 
-    const byNum = new Map(ev.pairs.map((p) => [p.n, p.fa]));
+    const byNum = new Map(ev.pairs.map((p) => [p.n, p.tgt]));
     card.querySelectorAll('.pair').forEach((row) => {
       const num = parseInt(row.querySelector('.num').textContent, 10);
-      const fa = row.querySelector('.fa');
-      if (!fa) return;
+      const tgt = row.querySelector('.tgt');
+      if (!tgt) return;
       const text = byNum.get(num);
       if (text != null) {
-        fa.textContent = text;
-        fa.classList.remove('inflight', 'kept');
+        tgt.textContent = text;
+        tgt.classList.remove('inflight', 'kept');
       } else {
-        fa.textContent = '⚠ kept English';
-        fa.classList.remove('inflight');
-        fa.classList.add('kept');
+        tgt.textContent = '⚠ kept source';
+        tgt.classList.remove('inflight');
+        tgt.classList.add('kept');
       }
     });
   }
@@ -186,5 +219,5 @@ const Render = (() => {
     return div;
   }
 
-  return { el, fmtDur, fmtEta, buildCard, appendStream, resolveCard, errorCard, hint, prettyStream, clean };
+  return { el, fmtDur, fmtEta, buildCard, appendStream, resolveCard, errorCard, hint, prettyStream, clean, setLangs, langMeta, fontFor };
 })();

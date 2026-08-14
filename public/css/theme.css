@@ -14,14 +14,13 @@
   --accent-ink:  #0c211d;
   --accent-soft: rgba(92, 205, 182, 0.12);
   --gold:        #e6b45f;               /* goldenrod, for emphasis */
-  --en:          #c7d2ce;               /* source-language text */
+  --src:         #c7d2ce;               /* source-language text */
   --danger:      #e28a77;
   --danger-soft: rgba(226, 138, 119, 0.12);
   --shadow:      0 1px 0 rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.28);
 
   --font-ui:  system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
-  --font-fa:  "Noto Naskh Arabic", "Noto Sans Arabic", "Vazirmatn", "Gulzar", "Tahoma", sans-serif;
 }
 
 :root[data-theme="light"] {
@@ -36,7 +35,7 @@
   --accent-ink:  #f2fcf9;
   --accent-soft: rgba(30, 135, 117, 0.10);
   --gold:        #a5761d;
-  --en:          #44554f;
+  --src:         #44554f;
   --danger:      #b2452f;
   --danger-soft: rgba(178, 69, 47, 0.10);
   --shadow:      0 1px 0 rgba(30, 45, 40, 0.08), 0 8px 24px rgba(30, 45, 40, 0.10);

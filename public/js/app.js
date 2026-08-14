@@ -106,10 +106,6 @@
       label: `${m.name} · ${m.parameterSize || '?'} (${m.sizeGB}GB${m.quantizationLevel ? ', ' + m.quantizationLevel : ''})`,
     }));
     fillSelect($('modelSel'), items, 'models');
-    if (models.length && $('modelSel').options.length) {
-      const fav = models.findIndex((m) => m.name === 'aya-expanse:8b');
-      $('modelSel').selectedIndex = fav >= 0 ? fav : 0;
-    }
   }
   function populatePrompts(prompts) {
     fillSelect($('promptSel'), prompts.map((p) => ({ value: p.id, label: p.name })), 'prompts');
@@ -121,21 +117,22 @@
     issueCount = r.count || 0;
     $('statIssues').textContent = issueCount;
     $('statIssues').classList.toggle('has', issueCount > 0);
-    $('fixBtn').disabled = issueCount === 0;
-    $('clearIssuesBtn').disabled = issueCount === 0;
+    // Buttons stay clickable so they always respond with feedback (a stale page
+    // shouldn't silently no-op); the count itself communicates "nothing to fix".
   }
   async function refreshOut() {
     const r = await API.outList();
-    const fa = (r.files || []).filter((f) => /_fa\.epub$/i.test(f.name)).sort((a, b) => b.mtime.localeCompare(a.mtime));
+    const tgt = ($('tgtLangSel') && $('tgtLangSel').value) || 'fa';
+    const out = (r.files || []).filter((f) => new RegExp('_' + tgt + '\\.epub$', 'i').test(f.name)).sort((a, b) => b.mtime.localeCompare(a.mtime));
     const el = $('statOut');
     el.textContent = '';
-    if (!fa.length) {
+    if (!out.length) {
       el.textContent = '—';
       return;
     }
     const a = document.createElement('a');
-    a.href = '/api/out/' + encodeURIComponent(fa[0].name);
-    a.textContent = fa[0].name;
+    a.href = '/api/out/' + encodeURIComponent(out[0].name);
+    a.textContent = out[0].name;
     a.style.color = 'var(--accent)';
     a.title = 'download';
     el.appendChild(a);
@@ -167,6 +164,8 @@
       fromPage,
       toPage,
       format: $('formatSel').value,
+      sourceLang: $('srcLangSel').value,
+      targetLang: $('tgtLangSel').value,
     };
   }
 
@@ -174,6 +173,10 @@
     const c = cfg || gatherConfig();
     if (!c.book || !c.model) {
       flash('Choose a book and a model first');
+      return;
+    }
+    if (c.sourceLang && c.targetLang && c.sourceLang === c.targetLang) {
+      flash('Source and target must be different languages');
       return;
     }
     $('feed').textContent = '';
@@ -230,7 +233,7 @@
   function clearPromptFields() {
     editingId = null;
     $('pName').value = '';
-    $('pSystem').value = 'You are a professional literary translator rendering English prose into natural, idiomatic Persian (Farsi).';
+    $('pSystem').value = 'You are a professional literary translator. Translate each paragraph faithfully into the requested target language, preserving meaning, tone and markup.';
     $('pRules').value = 'Translate each numbered paragraph faithfully; preserve order, meaning and tone.';
     $('pTemp').value = 0.3;
     $('pCtx').value = 8192;
@@ -262,21 +265,132 @@
     }
   }
 
-  // ---- settings (persistent: concurrency, words/request) ----
+  // ---- settings (persistent — single source of truth in data/settings.json) ----
+  const PROVIDER_BASE_URLS = { ollama: 'http://localhost:11434', openai: 'https://api.openai.com/v1' };
   let settingsTimer = null;
+
   function showSaved() {
     const s = $('settingsSaved');
     s.hidden = false;
     clearTimeout(s._t);
     s._t = setTimeout(() => { s.hidden = true; }, 1200);
   }
+
+  function populateLanguages(list) {
+    const opts = (list || []).map((l) => ({ value: l.code, label: l.name }));
+    fillSelect($('srcLangSel'), opts, 'languages');
+    fillSelect($('tgtLangSel'), opts, 'languages');
+    fillSelect($('srcLangSelModal'), opts, 'languages');
+    fillSelect($('tgtLangSelModal'), opts, 'languages');
+  }
+
+  // "Disable reasoning" (think:false) is an Ollama-specific knob.
+  function gateReasoning(provider) {
+    $('noThinkWrap').hidden = provider !== 'ollama';
+  }
+
+  // Keep the range-bar and modal language selects in sync + surface the equal-pair error.
+  function syncLangSelects() {
+    const s = $('srcLangSel').value;
+    const t = $('tgtLangSel').value;
+    $('srcLangSelModal').value = s;
+    $('tgtLangSelModal').value = t;
+    $('langErr').hidden = !(s && t && s === t);
+  }
+
   async function loadSettings() {
     try {
       const r = await API.settings();
       if (r.concurrency != null) $('concInput').value = r.concurrency;
       if (r.wordsPerRequest != null) $('wprInput').value = r.wordsPerRequest;
+      $('providerSel').value = r.provider || 'ollama';
+      // Empty stored URL means "use the provider default" — surface that default
+      // (e.g. http://localhost:11434) so the field is never blank.
+      $('baseUrlInput').value = r.baseUrl || (r.effective && r.effective.baseUrl) || PROVIDER_BASE_URLS[r.provider || 'ollama'] || '';
+      $('apiKeyInput').value = r.apiKey || '';
+      $('hostInput').value = r.host || '';
+      $('portInput').value = r.port || 8765;
+      if (r.sourceLang) $('srcLangSel').value = r.sourceLang;
+      if (r.targetLang) $('tgtLangSel').value = r.targetLang;
+      syncLangSelects();
+      gateReasoning(r.provider || 'ollama');
+      const eff = r.effective || {};
+      $('apiKeyBadge').hidden = !eff.apiKeyFromEnv;
+      $('apiKeyBadge').textContent = 'using LLM_API_KEY env var';
+      const envPinned = (eff.env && (eff.env.PORT || eff.env.HOST)) || false;
+      $('serverEnvBadge').hidden = !envPinned;
+      $('serverEnvBadge').textContent = 'PORT/HOST env overrides the values above';
     } catch (e) { /* keep defaults */ }
   }
+
+  async function saveLanguage() {
+    try {
+      await API.setSettings({ sourceLang: $('srcLangSel').value, targetLang: $('tgtLangSel').value });
+      showSaved();
+    } catch (e) { /* ignore */ }
+  }
+
+  async function refreshModels() {
+    try {
+      const r = await API.models();
+      populateModels(r.models);
+      if (r.error) setStatus('error', 'provider offline');
+    } catch (e) { /* keep the old list */ }
+  }
+
+  async function testConnection() {
+    const btn = $('testConnBtn');
+    btn.disabled = true;
+    $('testConnStatus').textContent = 'Testing…';
+    try {
+      const r = await API.testProvider({
+        provider: $('providerSel').value,
+        baseUrl: $('baseUrlInput').value.trim(),
+        apiKey: $('apiKeyInput').value,
+      });
+      $('testConnStatus').textContent = r.ok
+        ? `Connected — ${r.modelCount} models · ${r.baseUrl}`
+        : `Failed: ${r.error}`;
+    } catch (e) {
+      $('testConnStatus').textContent = 'Could not reach the server';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function saveSettings() {
+    const src = $('srcLangSelModal').value;
+    const tgt = $('tgtLangSelModal').value;
+    if (src && tgt && src === tgt) {
+      $('langErr').hidden = false;
+      flash('Source and target must be different languages');
+      return;
+    }
+    const body = {
+      provider: $('providerSel').value,
+      baseUrl: $('baseUrlInput').value.trim(),
+      apiKey: $('apiKeyInput').value,
+      host: $('hostInput').value.trim(),
+      port: parseInt($('portInput').value, 10) || 8765,
+      sourceLang: src,
+      targetLang: tgt,
+    };
+    try {
+      const r = await API.setSettings(body);
+      if (r && r.error) { flash(r.error); return; }
+      $('srcLangSel').value = src;
+      $('tgtLangSel').value = tgt;
+      syncLangSelects();
+      gateReasoning(body.provider);
+      await refreshModels();
+      refreshOut();
+      $('settingsPanel').hidden = true;
+      flash('settings saved — host/port apply on the next server start');
+    } catch (e) {
+      flash('could not save settings');
+    }
+  }
+
   function wireSettings() {
     const save = async () => {
       const body = {
@@ -294,11 +408,37 @@
         settingsTimer = setTimeout(save, 600);
       });
     }
+    for (const id of ['srcLangSel', 'tgtLangSel']) {
+      $(id).addEventListener('change', () => {
+        clearTimeout(settingsTimer);
+        settingsTimer = setTimeout(saveLanguage, 300);
+      });
+    }
+    $('settingsBtn').addEventListener('click', () => {
+      loadSettings().then(() => {
+        $('testConnStatus').textContent = 'Not tested';
+        $('settingsPanel').hidden = false;
+      });
+    });
+    $('closeSettings').addEventListener('click', () => { $('settingsPanel').hidden = true; });
+    $('saveSettings').addEventListener('click', saveSettings);
+    $('testConnBtn').addEventListener('click', testConnection);
+    $('providerSel').addEventListener('change', () => {
+      const cur = $('baseUrlInput').value.trim();
+      // If the current URL is blank or one of the built-in defaults, swap in the
+      // new provider's default. A custom URL (e.g. a DeepSeek base) is kept.
+      const isDefault = Object.values(PROVIDER_BASE_URLS).includes(cur);
+      if (!cur || isDefault) {
+        $('baseUrlInput').value = PROVIDER_BASE_URLS[$('providerSel').value];
+      }
+    });
   }
 
   // ---- boot ----
   async function boot() {
-    const [b, m, p, st] = await Promise.all([API.books(), API.models(), API.prompts(), API.status()]);
+    const [b, m, p, st, langs] = await Promise.all([API.books(), API.models(), API.prompts(), API.status(), API.languages()]);
+    Render.setLangs(langs.languages);
+    populateLanguages(langs.languages);
     await loadSettings();
     wireSettings();
     populateBooks(b.books);
@@ -310,7 +450,7 @@
       $('promptVersionSel').value = promptsCache[0].id;
       fillPromptFields(promptsCache[0]);
     }
-    if (m.error) setStatus('error', 'ollama offline');
+    if (m.error) setStatus('error', 'provider offline');
     await refreshIssues();
     await refreshOut();
 
@@ -321,6 +461,9 @@
       if (previousJob.book) $('bookSel').value = previousJob.book;
       if (previousJob.model) $('modelSel').value = previousJob.model;
       if (previousJob.promptId) $('promptSel').value = previousJob.promptId;
+      if (previousJob.sourceLang) $('srcLangSel').value = previousJob.sourceLang;
+      if (previousJob.targetLang) $('tgtLangSel').value = previousJob.targetLang;
+      syncLangSelects();
       $('noThink').checked = previousJob.think === false;
       if (previousJob.range) {
         if (previousJob.range.fromWord != null) $('fromPage').value = Math.floor(previousJob.range.fromWord / 250) + 1;
@@ -422,6 +565,8 @@
           promptId: r.previous.promptId,
           think: r.previous.think === false,
           format: r.previous.format || 'epub',
+          sourceLang: r.previous.sourceLang,
+          targetLang: r.previous.targetLang,
           fromWord: (r.previous.range && r.previous.range.fromWord) || null,
           toWord: (r.previous.range && r.previous.range.toWord) || null,
         });
@@ -435,12 +580,21 @@
   $('dismissBanner').addEventListener('click', () => hideResume());
 
   $('fixBtn').addEventListener('click', async () => {
-    if (!issueCount) return;
+    await refreshIssues(); // re-sync the count in case this page is stale
+    if (!issueCount) { flash('no issues to fix — nothing was flagged for review'); return; }
+    const c = gatherConfig();
+    if (!c.model) { flash('choose a model first'); return; }
     flash('running fix pass…');
-    await API.fix(gatherConfig());
+    try {
+      const res = await API.fix(c);
+      if (res && res.error) flash('fix: ' + res.error);
+    } catch (e) {
+      flash('fix could not start — is the server up?');
+    }
   });
   $('clearIssuesBtn').addEventListener('click', async () => {
-    if (!issueCount) return;
+    await refreshIssues();
+    if (!issueCount) { flash('nothing to clear'); return; }
     await API.clearIssues();
     await refreshIssues();
     flash('review state cleared — starting fresh');
@@ -511,7 +665,7 @@
     }
   });
 
-  // ---- glossary (persistent name → Persian, survives restarts) ----
+  // ---- glossary (persistent source name → target form, survives restarts) ----
   let glossaryCache = [];
 
   async function refreshGlossary() {
@@ -524,7 +678,7 @@
     const list = $('glossaryList');
     list.textContent = '';
     const entries = glossaryCache.filter(
-      (e) => !filter || e.en.toLowerCase().includes(filter) || e.fa.includes(filter)
+      (e) => !filter || e.src.toLowerCase().includes(filter) || e.tgt.includes(filter)
     );
     if (!entries.length) {
       list.appendChild(Render.el('p', 'panel-note', 'No names yet — add one below or press Auto-build.'));
@@ -532,28 +686,28 @@
     }
     for (const e of entries) {
       const row = Render.el('div', 'gloss-row');
-      const en = Render.el('span', 'gloss-en', e.en + (e.source === 'user' ? ' ★' : ''));
-      en.title = e.source === 'user' ? 'you set this — always included' : `auto-built · freq ${e.freq || 0}`;
-      const fa = document.createElement('input');
-      fa.className = 'gloss-fa';
-      fa.value = e.fa;
-      fa.setAttribute('aria-label', 'Persian form for ' + e.en);
+      const src = Render.el('span', 'gloss-src', e.src + (e.source === 'user' ? ' ★' : ''));
+      src.title = e.source === 'user' ? 'you set this — always included' : `auto-built · freq ${e.freq || 0}`;
+      const tgt = document.createElement('input');
+      tgt.className = 'gloss-tgt';
+      tgt.value = e.tgt;
+      tgt.setAttribute('aria-label', 'Target form for ' + e.src);
       let timer;
-      fa.addEventListener('input', () => {
+      tgt.addEventListener('input', () => {
         clearTimeout(timer);
         timer = setTimeout(async () => {
-          if (!fa.value.trim()) return;
-          await API.updateGlossary(e.en, fa.value);
+          if (!tgt.value.trim()) return;
+          await API.updateGlossary(e.src, tgt.value);
         }, 700);
       });
       const del = Render.el('button', 'btn mini danger', '✕');
       del.title = 'remove';
       del.addEventListener('click', async () => {
-        await API.deleteGlossary(e.en);
+        await API.deleteGlossary(e.src);
         await refreshGlossary();
       });
-      row.appendChild(en);
-      row.appendChild(fa);
+      row.appendChild(src);
+      row.appendChild(tgt);
       row.appendChild(del);
       list.appendChild(row);
     }
@@ -570,14 +724,14 @@
     renderGlossary($('glossarySearch').value.trim().toLowerCase())
   );
   $('gAddBtn').addEventListener('click', async () => {
-    const en = $('gAddEn').value.trim();
-    const fa = $('gAddFa').value.trim();
-    if (!en || !fa) { flash('enter an English name and its Persian form'); return; }
-    await API.setGlossary(en, fa);
-    $('gAddEn').value = '';
-    $('gAddFa').value = '';
+    const src = $('gAddSrc').value.trim();
+    const tgt = $('gAddTgt').value.trim();
+    if (!src || !tgt) { flash('enter a source name and its target form'); return; }
+    await API.setGlossary(src, tgt);
+    $('gAddSrc').value = '';
+    $('gAddTgt').value = '';
     await refreshGlossary();
-    flash(`added “${en}” — will be used from the next run`);
+    flash(`added “${src}” — will be used from the next run`);
   });
   $('autobuildBtn').addEventListener('click', async () => {
     const c = gatherConfig();

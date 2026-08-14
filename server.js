@@ -1,14 +1,17 @@
 // server.js — The Fountain dashboard: Express API + static frontend + SSE.
 //
 // Run:   cd app && npm install && node server.js
-// Open:  http://localhost:8765
+// The server binds to settings.host/settings.port (data/settings.json, editable
+// from the ⚙ Settings panel). Those take effect on the next start; env PORT/HOST
+// override them at boot.
 
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { listModels } = require('./lib/ollama');
+const { getProvider, resolveConfig, makeProvider, effectiveConfig } = require('./lib/providers');
 const epub = require('./lib/epub');
+const languages = require('./lib/languages');
 const { JsonlLogger } = require('./lib/logger');
 const { PromptStore } = require('./lib/prompts');
 const { GlossaryStore } = require('./lib/glossary');
@@ -23,15 +26,18 @@ const DATA = path.join(APP_DIR, 'data');
 const BOOKS = path.join(APP_DIR, 'books');
 const WORK = path.join(APP_DIR, 'work');
 const OUT = path.join(APP_DIR, 'out');
-const PORT = process.env.PORT || 8765;
 
 for (const d of [DATA, BOOKS, WORK, OUT]) fs.mkdirSync(d, { recursive: true });
+
+// Settings are loaded before host/port so the server binds to what the panel says.
+const settings = new SettingsStore(path.join(DATA, 'settings.json'));
+const HOST = process.env.HOST || settings.get().host || '0.0.0.0';
+const PORT = parseInt(process.env.PORT || settings.get().port || 8765, 10);
 
 const requestsLog = new JsonlLogger(path.join(DATA, 'requests.log'));
 const issuesLog = new JsonlLogger(path.join(DATA, 'issues.log'));
 const prompts = new PromptStore(path.join(DATA, 'prompts.json'));
 const glossary = new GlossaryStore(path.join(DATA, 'glossary.json'));
-const settings = new SettingsStore(path.join(DATA, 'settings.json'));
 const jobs = new JobManager({ dataDir: DATA, workDir: WORK, outDir: OUT, emit: (t, d) => sse.broadcast(t, d) });
 jobs.requestsLogger = requestsLog;
 jobs.issuesLogger = issuesLog;
@@ -73,9 +79,30 @@ app.get('/api/books', wrap(async (req, res) => {
 
 app.get('/api/models', wrap(async (req, res) => {
   try {
-    res.json({ models: await listModels() });
+    res.json({ models: await getProvider(settings).listModels() });
   } catch (e) {
     res.json({ models: [], error: e.message || String(e) });
+  }
+}));
+
+app.get('/api/languages', (req, res) => res.json({ languages: languages.list() }));
+
+// Test a provider connection with form values (does NOT persist). Used by the
+// settings panel's Test-connection button before saving.
+app.post('/api/providers/test', wrap(async (req, res) => {
+  const b = req.body || {};
+  const s = settings.get();
+  const provider = b.provider || s.provider;
+  const cfg = resolveConfig({
+    provider,
+    baseUrl: typeof b.baseUrl === 'string' && b.baseUrl.trim() ? b.baseUrl.trim() : s.baseUrl,
+    apiKey: typeof b.apiKey === 'string' ? b.apiKey : s.apiKey,
+  });
+  try {
+    const models = await makeProvider(cfg).listModels();
+    res.json({ ok: true, modelCount: models.length, baseUrl: cfg.baseUrl, provider: cfg.provider });
+  } catch (e) {
+    res.json({ ok: false, error: e.message || String(e), baseUrl: cfg.baseUrl, provider: cfg.provider });
   }
 }));
 
@@ -101,68 +128,89 @@ app.delete('/api/prompts/:id', (req, res) => {
   res.status(204).end();
 });
 
-// ---- glossary (persistent name → Persian) ----
+// ---- glossary (persistent source name → target form) ----
 app.get('/api/glossary', (req, res) => res.json({ entries: glossary.list() }));
 
 app.post('/api/glossary', (req, res) => {
-  const { en, fa } = req.body || {};
-  if (!en || !fa) return res.status(400).json({ error: 'en and fa required' });
-  res.status(201).json({ entry: glossary.set(en, fa, 'user') });
+  const { src, tgt } = req.body || {};
+  if (!src || !tgt) return res.status(400).json({ error: 'src and tgt required' });
+  res.status(201).json({ entry: glossary.set(src, tgt, 'user') });
 });
 
-app.put('/api/glossary/:en', (req, res) => {
-  const { fa } = req.body || {};
-  const en = decodeURIComponent(req.params.en);
-  if (!fa) return res.status(400).json({ error: 'fa required' });
-  const entry = glossary.set(en, fa, 'user');
+app.put('/api/glossary/:src', (req, res) => {
+  const { tgt } = req.body || {};
+  const src = decodeURIComponent(req.params.src);
+  if (!tgt) return res.status(400).json({ error: 'tgt required' });
+  const entry = glossary.set(src, tgt, 'user');
   res.json({ entry });
 });
 
-app.delete('/api/glossary/:en', (req, res) => {
-  const en = decodeURIComponent(req.params.en);
-  res.json({ removed: glossary.remove(en) });
+app.delete('/api/glossary/:src', (req, res) => {
+  const src = decodeURIComponent(req.params.src);
+  res.json({ removed: glossary.remove(src) });
 });
 
 // Extract the book's proper nouns and transliterate the ones not yet in the store.
 app.post('/api/glossary/autobuild', wrap(async (req, res) => {
-  const { book, model, promptId, think, limit } = req.body || {};
+  const { book, model, promptId, think, limit, sourceLang, targetLang } = req.body || {};
   const bookPath = safeJoin(BOOKS, book);
   if (!bookPath || !fs.existsSync(bookPath)) return res.status(400).json({ error: 'book not found' });
   if (!model) return res.status(400).json({ error: 'model required' });
   const prompt = prompts.get(promptId);
   if (!prompt) return res.status(400).json({ error: 'prompt not found' });
   const max = limit || prompt.glossaryLimit || 20;
+  const s = settings.get();
+  const srcLang = sourceLang || s.sourceLang || 'en';
+  const tgtLang = targetLang || s.targetLang || 'fa';
 
   const bookData = await epub.readEpub(bookPath);
   const textFiles = epub.listTextFiles(bookData.entries);
   const allText = textFiles.map((f) => bookData.buffers.get(f).toString('utf8'));
-  const candidates = extractNames(allText);
+  const candidates = extractNames(allText, languages.scriptOf(srcLang));
   const missing = candidates.filter((n) => !glossary.get(n.name)).slice(0, max);
 
   let added = 0;
   if (missing.length) {
-    const map = await buildGlossary(model, missing.map((n) => n.name), { think: !!think });
-    const autos = missing.filter((n) => map[n.name]).map((n) => ({ en: n.name, fa: map[n.name], freq: n.freq }));
+    const map = await buildGlossary(getProvider(settings), model, missing.map((n) => n.name), {
+      think: !!think,
+      sourceLang: srcLang,
+      targetLang: tgtLang,
+    });
+    const autos = missing.filter((n) => map[n.name]).map((n) => ({ src: n.name, tgt: map[n.name], freq: n.freq }));
     added = glossary.merge(autos);
   }
   res.json({ added, missing: missing.length, entries: glossary.list() });
 }));
 
-// ---- settings (persistent) ----
-app.get('/api/settings', (req, res) => res.json(settings.get()));
+// ---- settings (persistent, single source of truth) ----
+app.get('/api/settings', (req, res) => res.json({ ...settings.get(), effective: effectiveConfig(settings) }));
 app.put('/api/settings', (req, res) => {
-  const { concurrency, wordsPerRequest } = req.body || {};
+  const b = req.body || {};
   const patch = {};
-  if (concurrency != null) patch.concurrency = Math.min(8, Math.max(1, parseInt(concurrency, 10) || 1));
-  if (wordsPerRequest != null) patch.wordsPerRequest = Math.min(1000, Math.max(1, parseInt(wordsPerRequest, 10) || 1));
-  res.json(settings.set(patch));
+  if (b.provider != null) {
+    if (!['ollama', 'openai'].includes(b.provider)) return res.status(400).json({ error: 'provider must be ollama or openai' });
+    patch.provider = b.provider;
+  }
+  for (const k of ['baseUrl', 'host', 'sourceLang', 'targetLang']) {
+    if (typeof b[k] === 'string') patch[k] = b[k].trim();
+  }
+  if (typeof b.apiKey === 'string') patch.apiKey = b.apiKey; // empty string clears it
+  if (b.port != null) patch.port = Math.min(65535, Math.max(1, parseInt(b.port, 10) || 8765));
+  if (b.concurrency != null) patch.concurrency = Math.min(8, Math.max(1, parseInt(b.concurrency, 10) || 1));
+  if (b.wordsPerRequest != null) patch.wordsPerRequest = Math.min(1000, Math.max(1, parseInt(b.wordsPerRequest, 10) || 1));
+  if (patch.sourceLang && !languages.get(patch.sourceLang)) return res.status(400).json({ error: 'unknown source language' });
+  if (patch.targetLang && !languages.get(patch.targetLang)) return res.status(400).json({ error: 'unknown target language' });
+  if (patch.sourceLang && patch.targetLang && patch.sourceLang === patch.targetLang) {
+    return res.status(400).json({ error: 'source and target must be different languages' });
+  }
+  res.json({ ...settings.set(patch), effective: effectiveConfig(settings) });
 });
 
 // ---- translation job ----
 app.get('/api/translate/status', (req, res) => res.json(jobs.status()));
 
 app.post('/api/translate/start', wrap(async (req, res) => {
-  const { book, model, promptId, think, fromPage, toPage, fromWord, toWord, format } = req.body || {};
+  const { book, model, promptId, think, fromPage, toPage, fromWord, toWord, format, sourceLang, targetLang } = req.body || {};
   const bookPath = safeJoin(BOOKS, book);
   if (!bookPath || !fs.existsSync(bookPath)) return res.status(400).json({ error: 'book not found' });
   if (!model) return res.status(400).json({ error: 'model required' });
@@ -170,6 +218,13 @@ app.post('/api/translate/start', wrap(async (req, res) => {
   if (!prompt) return res.status(400).json({ error: 'prompt not found' });
   const fmt = format || 'epub';
   if (!['epub', 'docx', 'pdf'].includes(fmt)) return res.status(400).json({ error: 'format must be epub, docx, or pdf' });
+
+  const s = settings.get();
+  const srcLang = sourceLang || s.sourceLang || 'en';
+  const tgtLang = targetLang || s.targetLang || 'fa';
+  if (!languages.get(srcLang)) return res.status(400).json({ error: 'unknown source language' });
+  if (!languages.get(tgtLang)) return res.status(400).json({ error: 'unknown target language' });
+  if (srcLang === tgtLang) return res.status(400).json({ error: 'source and target must be different languages' });
 
   let fromW = fromWord;
   let toW = toWord;
@@ -184,6 +239,9 @@ app.post('/api/translate/start', wrap(async (req, res) => {
     bookName: path.basename(bookPath),
     epubPath: bookPath,
     model,
+    provider: getProvider(settings),
+    sourceLang: srcLang,
+    targetLang: tgtLang,
     promptId,
     prompt,
     think: !!think,
@@ -216,16 +274,24 @@ let fixing = false;
 app.post('/api/fix', wrap(async (req, res) => {
   if (jobs.isRunning()) return res.status(409).json({ error: 'a translation is running' });
   if (fixing) return res.status(409).json({ error: 'a fix pass is already running' });
-  const { model, promptId, think, book } = req.body || {};
+  const { model, promptId, think, book, sourceLang, targetLang } = req.body || {};
   const prompt = prompts.get(promptId);
   if (!prompt) return res.status(400).json({ error: 'prompt not found' });
   if (!model) return res.status(400).json({ error: 'model required' });
   const sourceBook = safeJoin(BOOKS, book);
   if (!sourceBook || !fs.existsSync(sourceBook)) return res.status(400).json({ error: 'book not found' });
+  const s = settings.get();
+  const srcLang = sourceLang || s.sourceLang || 'en';
+  const tgtLang = targetLang || s.targetLang || 'fa';
 
-  // Find the latest v1 output to patch.
-  const outs = (fs.existsSync(OUT) ? fs.readdirSync(OUT) : []).filter((f) => /_fa\.epub$/i.test(f));
-  if (!outs.length) return res.status(400).json({ error: 'no v1 output to fix — translate first' });
+  // Find the latest translated output to patch. The Fix pass rebuilds an EPUB, so
+  // it needs an .epub output — DOCX/PDF exports have no v1 EPUB to patch.
+  const outs = (fs.existsSync(OUT) ? fs.readdirSync(OUT) : []).filter((f) => new RegExp('_' + tgtLang + '\\.epub$', 'i').test(f));
+  if (!outs.length) {
+    return res.status(400).json({
+      error: `no _${tgtLang}.epub to fix — the Fix pass patches EPUB outputs only. Export the book as EPUB, then Fix re-translates the flagged paragraphs and writes _${tgtLang}_v2.epub.`,
+    });
+  }
   const v1Path = path.join(OUT, outs[0]);
 
   fixing = true;
@@ -243,6 +309,9 @@ app.post('/api/fix', wrap(async (req, res) => {
       think: !!think,
       emit,
       signal: null,
+      provider: getProvider(settings),
+      sourceLang: srcLang,
+      targetLang: tgtLang,
     });
     emit('fix-done', { fixed: r.fixed, total: r.total, outPath: r.outPath });
   } catch (e) {
@@ -299,8 +368,10 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: err.message || String(err) });
 });
 
-app.listen(PORT, () => {
-  console.log(`▶  The Fountain — dashboard at http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  const shown = HOST === '0.0.0.0' ? `http://localhost:${PORT}` : `http://${HOST}:${PORT}`;
+  console.log(`▶  The Fountain — dashboard at ${shown}`);
+  console.log(`   provider: ${settings.get().provider || 'ollama'}`);
   console.log(`   books: ${BOOKS}`);
   console.log(`   outputs: ${OUT}`);
 });

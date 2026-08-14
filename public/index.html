@@ -12,7 +12,7 @@
   <header class="topbar">
     <div class="brand">
       <h1>The Fountain</h1>
-      <span class="tagline">EPUB → Persian · local Ollama</span>
+      <span class="tagline">EPUB → any language · Ollama or OpenAI-compatible</span>
     </div>
     <div class="controls">
       <label class="field">Book
@@ -26,6 +26,7 @@
       </label>
       <button id="editPrompt" class="btn ghost" title="Edit prompts" type="button">✎</button>
       <button id="glossaryBtn" class="btn ghost" title="Name glossary" type="button">Names</button>
+      <button id="settingsBtn" class="btn ghost" title="Server, provider & language settings" type="button">⚙ Settings</button>
       <label class="field">Format
         <select id="formatSel">
           <option value="epub">EPUB</option>
@@ -33,9 +34,11 @@
           <option value="pdf">PDF</option>
         </select>
       </label>
-      <label class="switch" title="Skip the model's reasoning phase (much faster)">
-        <input type="checkbox" id="noThink" checked> Disable reasoning
-      </label>
+      <span id="noThinkWrap">
+        <label class="switch" title="Skip the model's reasoning phase (Ollama only, much faster)">
+          <input type="checkbox" id="noThink" checked> Disable reasoning
+        </label>
+      </span>
       <button id="startBtn" class="btn primary" type="button">Start</button>
       <button id="stopBtn" class="btn danger" type="button" disabled>Stop</button>
     </div>
@@ -58,6 +61,14 @@
     <span id="settingsSaved" class="range-hint saved" hidden>saved</span>
     <label class="switch" title="Auto-scroll to the newest request; uncheck to scroll freely while translating">
       <input type="checkbox" id="follow" checked> Follow
+    </label>
+    <span class="range-sep"></span>
+    <label class="langpick">Source
+      <select id="srcLangSel"></select>
+    </label>
+    <span class="lang-arrow">→</span>
+    <label class="langpick">Target
+      <select id="tgtLangSel"></select>
     </label>
   </section>
 
@@ -124,7 +135,7 @@
         <button id="closeGlossary" class="btn ghost" type="button">✕</button>
       </div>
       <p class="panel-note">
-        These Persian forms are sent with every batch and saved to
+        These target-language forms are sent with every batch and saved to
         <code>app/data/glossary.json</code> — they survive restarts. Edit any value;
         ★ marks names you've set yourself (always included). Auto-built names are
         included by frequency up to the prompt's top-N.
@@ -134,8 +145,8 @@
         <button id="autobuildBtn" class="btn mini primary" type="button">Auto-build</button>
       </div>
       <div class="glossary-add">
-        <input id="gAddEn" type="text" placeholder="English name">
-        <input id="gAddFa" type="text" placeholder="Persian form">
+        <input id="gAddSrc" type="text" placeholder="Source name">
+        <input id="gAddTgt" type="text" placeholder="Target form">
         <button id="gAddBtn" class="btn mini" type="button">Add</button>
       </div>
       <div id="glossaryList" class="glossary-list"></div>
@@ -143,17 +154,74 @@
   </main>
 
   <footer class="foot">
-    Start a translation and every request appears here the moment it's sent — Persian
-    streams in live, then settles into English / Persian pairs. A stopped job resumes
-    from where it left off;
+    Start a translation and every request appears here the moment it's sent — the
+    target text streams in live, then settles into source / target pairs. A stopped
+    job resumes from where it left off;
     <button id="rawToggle" class="link-btn" type="button">request log</button>
     <span class="foot-sep">·</span>
     <button id="resetBtn" class="link-btn danger-link" type="button">reset book</button>
   </footer>
 
+  <section id="settingsPanel" class="settings-overlay" hidden>
+    <div class="settings-modal">
+      <div class="panel-head">
+        <h2>Settings</h2>
+        <button id="closeSettings" class="btn ghost" type="button">✕</button>
+      </div>
+
+      <div class="sgroup">
+        <h3>Server</h3>
+        <p class="panel-note">
+          The dashboard binds here. Changes take effect on the next server start;
+          <code>PORT</code> / <code>HOST</code> env vars override the saved values.
+        </p>
+        <div class="prow">
+          <label class="pfield">Host <input id="hostInput" type="text" spellcheck="false" placeholder="0.0.0.0"></label>
+          <label class="pfield">Port <input id="portInput" type="number" min="1" max="65535" placeholder="8765"></label>
+        </div>
+        <span id="serverEnvBadge" class="badge" hidden></span>
+      </div>
+
+      <div class="sgroup">
+        <h3>LLM provider</h3>
+        <label class="pfield">Type
+          <select id="providerSel">
+            <option value="ollama">Ollama (local)</option>
+            <option value="openai">OpenAI-compatible — OpenAI · DeepSeek · Groq · OpenRouter · Together · Mistral</option>
+          </select>
+        </label>
+        <label class="pfield">Base URL
+          <input id="baseUrlInput" type="text" spellcheck="false" placeholder="http://localhost:11434">
+        </label>
+        <label class="pfield">API key
+          <input id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-… (leave empty for Ollama)">
+        </label>
+        <span id="apiKeyBadge" class="badge" hidden></span>
+        <div class="panel-versions">
+          <button id="testConnBtn" class="btn mini" type="button">Test connection</button>
+          <span id="testConnStatus" class="saved-hint">Not tested</span>
+        </div>
+      </div>
+
+      <div class="sgroup">
+        <h3>Language</h3>
+        <div class="prow">
+          <label class="pfield">Source <select id="srcLangSelModal"></select></label>
+          <label class="pfield">Target <select id="tgtLangSelModal"></select></label>
+        </div>
+        <span id="langErr" class="badge danger" hidden>Source and target must differ</span>
+      </div>
+
+      <div class="panel-actions">
+        <button id="saveSettings" class="btn primary" type="button">Save</button>
+        <span id="settingsSavedMsg" class="saved-hint"></span>
+      </div>
+    </div>
+  </section>
+
   <section id="rawPanel" class="rawpanel" hidden>
     <div class="rawhead">
-      <span>Request log — every Ollama call</span>
+      <span>Request log — every model call</span>
       <button id="closeRaw" class="btn mini" type="button">✕</button>
     </div>
     <pre id="rawlog" class="rawlog"></pre>
