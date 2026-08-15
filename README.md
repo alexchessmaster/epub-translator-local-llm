@@ -1,4 +1,4 @@
-# The Fountain — EPUB translation dashboard
+# The Book-Translate — EPUB translation dashboard
 
 A self-hosted web dashboard that translates an EPUB book into **any language pair**
 via a local **Ollama** model or **any OpenAI-compatible API** (OpenAI, DeepSeek,
@@ -126,6 +126,53 @@ startup, and `LLM_API_KEY` sets the key.
 
 Output files land in `out/` as `<book>_<lang>.epub` (e.g. `Book_fa.epub` for
 Persian, `Book_fr.epub` for French) and are linked in the stats bar.
+
+---
+
+## Run it headlessly (no browser)
+
+The dashboard is just a viewer — once a job starts, the server keeps translating on
+its own and writes the output to `out/`. You can start, monitor, and stop a
+translation with a few `curl` calls against the running server (it must be up:
+`node server.js`). Handy for scripting, or for kicking off a long run from a
+terminal without touching the browser.
+
+Start a whole-book translation (the saved `lastModel` / `lastPromptId` / `lastFormat`
+from the Settings panel work as-is — just name the book):
+
+```bash
+curl -s -X POST http://localhost:8765/api/translate/start \
+  -H 'content-type: application/json' \
+  -d '{"book":"Book.epub","model":"gemma4:e4b","promptId":"compact-v1","think":false,"format":"epub","sourceLang":"en","targetLang":"fa"}'
+```
+
+- `book` — exact filename from `books/` (spaces and dots as-is).
+- `think` — optional; `false` disables reasoning, `true` enables it (omitting it
+  is the same as `false`).
+- `format` — `epub` (default), `docx`, or `pdf`.
+- No range fields = **whole book**. Restrict with either page numbers or a word range:
+  - pages → add `"fromPage":12,"toPage":13` (≈250 words/page)
+  - words → add `"fromWord":2100,"toWord":2160`
+
+Check progress, stop a job, or list the exact book filenames:
+
+```bash
+curl -s http://localhost:8765/api/translate/status   # percent, current file, ETA, state
+curl -s -X POST http://localhost:8765/api/translate/stop
+curl -s http://localhost:8765/api/books              # exact book filenames
+```
+
+Notes:
+
+- **One job at a time** — if a translation is already running, `start` returns
+  `409 {"error":"a translation is already running"}`. Stop it first, or just open
+  the dashboard afterward to watch that job's progress live (it streams to the
+  browser automatically).
+- **Fire-and-forget** — the `start` POST returns immediately and the job keeps
+  translating server-side after the command exits. Kill the `curl` and the job
+  carries on.
+- The server's other endpoints work the same way — see the REST API list below
+  (e.g. `POST /api/fix` to re-translate flagged paragraphs).
 
 ---
 
