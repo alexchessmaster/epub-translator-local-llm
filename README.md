@@ -17,7 +17,6 @@ requests to whichever LLM provider you configure.
 Fastest path from nothing to a translated book:
 
 ```bash
-cd app
 npm install
 node server.js            # dashboard at http://localhost:8765
 ```
@@ -25,8 +24,8 @@ node server.js            # dashboard at http://localhost:8765
 Then translate either way:
 
 - **In the browser** — open `http://localhost:8765`, pick a **book** (drop `.epub` files into
-  `app/books/` first), a **model**, and a **prompt**, then press **Start**. The output lands in
-  `app/out/`.
+  `books/` first), a **model**, and a **prompt**, then press **Start**. The output lands in
+  `out/`.
 - **Headless — no browser** — `curl` the server (it must be running). Whole book:
 
   ```bash
@@ -104,7 +103,7 @@ HOST=0.0.0.0 PORT=9000 node server.js   # bind all interfaces on port 9000
 ## Configure (the ⚙ Settings panel)
 
 Open the dashboard and click **⚙ Settings**. Everything here is persisted in
-`app/data/settings.json` (gitignored — your API key stays local) and survives
+`data/settings.json` (gitignored — your API key stays local) and survives
 restarts.
 
 ### Server
