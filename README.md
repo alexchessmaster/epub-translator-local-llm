@@ -14,19 +14,33 @@ requests to whichever LLM provider you configure.
 
 ## Prerequisites
 
-> **Node.js ≥ 18** (Express 5 requires it). Check with `node --version`.
+**Node.js ≥ 18** (Express 5 requires it) plus one LLM provider:
 
-You also need one of these:
-
-- **Ollama** (local, free, offline) — install from [ollama.com](https://ollama.com),
-  then pull a model, e.g. `ollama pull aya-expanse:8b`. The app lists every model
-  you've pulled.
+- **Ollama** (local, free, offline) — install it for your OS below, then pull a
+  model, e.g. `ollama pull aya-expanse:8b`. The app lists every model you've pulled.
 - **An OpenAI-compatible API key** — OpenAI, DeepSeek, Groq, OpenRouter, Together,
   Mistral, or Ollama's own `http://localhost:11434/v1` endpoint.
 
+### Install by operating system
+
+| Requirement | Windows | macOS | Linux (Debian/Ubuntu) |
+|---|---|---|---|
+| **Node.js ≥ 18** (check `node --version`) | [nodejs.org](https://nodejs.org) LTS installer, or `winget install OpenJS.NodeJS.LTS` | `brew install node`, or the [nodejs.org](https://nodejs.org) `.pkg` | `curl -fsSL https://deb.nodesource.com/setup_lts.x \| sudo -E bash - && sudo apt-get install -y nodejs` (or via [`nvm`](https://github.com/nvm-sh/nvm)) |
+| **Ollama** | [OllamaSetup.exe](https://ollama.com/download/windows) from [ollama.com](https://ollama.com) | `brew install ollama`, or the [macOS app](https://ollama.com/download/mac) | `curl -fsSL https://ollama.com/install.sh \| sh` |
+| **Translation model** | `ollama pull aya-expanse:8b` | `ollama pull aya-expanse:8b` | `ollama pull aya-expanse:8b` |
+| **Git** (only to clone the repo) | `winget install Git.Git`, or [git-scm.com](https://git-scm.com) | `brew install git` | `sudo apt-get install git` |
+| **Google Chrome** (only for PDF export) | installer from [google.com/chrome](https://www.google.com/chrome) | `brew install --cask google-chrome`, or the installer | `.deb` from [google.com/chrome](https://www.google.com/chrome) |
+
+> Ollama runs as a background service after install, so the dashboard reaches it at
+> `http://localhost:11434` with no extra steps. Verify Node with `node --version`
+> (should print `v18.x` or later).
+>
+> On other Linux distros, replace the apt commands with your package manager
+> (`sudo dnf install nodejs git` on Fedora, `sudo pacman -S nodejs git` on Arch);
+> the Ollama installer script and `nvm` work across all of them.
+
 **Optional:**
 
-- **Google Chrome** — needed only for PDF export (rendered by headless Chrome).
 - **Fonts** for the target language (e.g. Noto Naskh Arabic for Persian). DOCX/EPUB
   work without them; Word/browser fonts fall back gracefully.
 
