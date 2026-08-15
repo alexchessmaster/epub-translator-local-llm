@@ -83,10 +83,10 @@
     <div class="stat"><span class="stat-label">ETA</span><span id="statEta" class="stat-value">—</span></div>
     <div class="stat"><span class="stat-label">Chapter</span><span id="statFile" class="stat-value">—</span></div>
     <div class="stat">
-      <span class="stat-label">Needs review</span>
+      <span class="stat-label" title="Paragraphs the engine flagged while translating: left in English, dropped inline-markup tokens, or empty replies. Fix them here (Edit/Re-translate on a card) or run the Fix pass.">Flagged paragraphs</span>
       <span id="statIssues" class="stat-value issue-count">0</span>
-      <button id="fixBtn" class="btn mini" type="button" disabled>Fix</button>
-      <button id="clearIssuesBtn" class="btn mini" type="button" disabled title="Clear the review state to start completely fresh">Clear</button>
+      <button id="fixBtn" class="btn mini" type="button" disabled title="Re-translate every flagged paragraph into a _v2 output">Fix</button>
+      <button id="clearIssuesBtn" class="btn mini" type="button" disabled title="Clear the flagged list to start completely fresh">Clear</button>
     </div>
     <div class="stat"><span class="stat-label">Output</span><span id="statOut" class="stat-value">—</span></div>
     <div class="stat"><span class="stat-label">Status</span><span id="statStatus" class="stat-value status"><span class="dot"></span> idle</span></div>
@@ -125,6 +125,7 @@
       </div>
       <div class="panel-actions">
         <button id="savePrompt" class="btn primary" type="button">Save</button>
+        <button id="saveAsNewPrompt" class="btn mini" type="button" title="Duplicate the current prompt as a new one — the original is kept">Save as new</button>
         <span id="promptSaved" class="saved-hint"></span>
       </div>
     </aside>
@@ -135,10 +136,9 @@
         <button id="closeGlossary" class="btn ghost" type="button">✕</button>
       </div>
       <p class="panel-note">
-        These target-language forms are sent with every batch and saved to
-        <code>app/data/glossary.json</code> — they survive restarts. Edit any value;
-        ★ marks names you've set yourself (always included). Auto-built names are
-        included by frequency up to the prompt's top-N.
+        Names you set or edit are <strong>shared</strong> across all your books
+        (saved to <code>app/data/glossary.json</code>). Auto-built names are
+        <strong>per book</strong> and never leak into other books. Edit any value.
       </p>
       <div class="panel-versions">
         <input type="search" id="glossarySearch" class="psearch" placeholder="filter names…">
@@ -158,6 +158,10 @@
     target text streams in live, then settles into source / target pairs. A stopped
     job resumes from where it left off;
     <button id="rawToggle" class="link-btn" type="button">request log</button>
+    <span class="foot-sep">·</span>
+    <button id="reviewBtn" class="link-btn" type="button">Review</button>
+    <span class="foot-sep">·</span>
+    <button id="exportImportBtn" class="link-btn" type="button" title="Export a book to another computer, or import a book pack">Export / Import</button>
     <span class="foot-sep">·</span>
     <button id="resetBtn" class="link-btn danger-link" type="button">reset book</button>
   </footer>
@@ -225,6 +229,26 @@
       <button id="closeRaw" class="btn mini" type="button">✕</button>
     </div>
     <pre id="rawlog" class="rawlog"></pre>
+  </section>
+
+  <section id="reviewPanel" class="rawpanel" hidden>
+    <div class="rawhead">
+      <span>Review — saved translations (replayed without re-translating)</span>
+      <button id="importPackBtn" class="btn mini" type="button" title="Import a book pack (.zip) from another machine">Import pack</button>
+      <input id="importPackInput" type="file" accept=".zip,application/zip" hidden>
+      <button id="closeReview" class="btn mini" type="button">✕</button>
+    </div>
+    <div id="reviewList" class="review-list"></div>
+  </section>
+
+  <section id="transferPanel" class="rawpanel" hidden>
+    <div class="rawhead">
+      <span>Export / Import — move a book to another computer</span>
+      <button id="transferImportBtn" class="btn mini" type="button" title="Import a book pack (.zip) from another machine">Import pack</button>
+      <input id="transferImportInput" type="file" accept=".zip,application/zip" hidden>
+      <button id="closeTransfer" class="btn mini" type="button">✕</button>
+    </div>
+    <div id="transferList" class="review-list"></div>
   </section>
 
   <script src="js/api.js"></script>

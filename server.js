@@ -19,6 +19,8 @@ const { SettingsStore } = require('./lib/settings');
 const { JobManager } = require('./lib/jobs');
 const { runFix, loadIssues } = require('./lib/fixer');
 const { fixParagraph, rebuildOutputs } = require('./lib/editor');
+const { BookLogs } = require('./lib/booklogs');
+const { buildPack, importPack } = require('./lib/bookpack');
 const { extractNames, buildGlossary } = require('./lib/translator');
 const sse = require('./lib/sse');
 
@@ -37,11 +39,13 @@ const PORT = parseInt(process.env.PORT || settings.get().port || 8765, 10);
 
 const requestsLog = new JsonlLogger(path.join(DATA, 'requests.log'));
 const issuesLog = new JsonlLogger(path.join(DATA, 'issues.log'));
+const bookLogs = new BookLogs(path.join(DATA, 'logs'));
 const prompts = new PromptStore(path.join(DATA, 'prompts.json'));
 const glossary = new GlossaryStore(path.join(DATA, 'glossary.json'));
 const jobs = new JobManager({ dataDir: DATA, workDir: WORK, outDir: OUT, emit: (t, d) => sse.broadcast(t, d) });
 jobs.requestsLogger = requestsLog;
 jobs.issuesLogger = issuesLog;
+jobs.bookLogs = bookLogs;
 jobs.glossaryStore = glossary;
 jobs.settingsStore = settings;
 
@@ -69,7 +73,7 @@ app.get('/api/books', wrap(async (req, res) => {
     let textFiles = 0;
     try {
       const r = await epub.readEpub(p);
-      textFiles = epub.listTextFiles(r.entries).length;
+      textFiles = epub.listTextFiles(r.entries, r.buffers).length;
     } catch (e) {
       /* not a valid epub; still list it */
     }
@@ -129,29 +133,56 @@ app.delete('/api/prompts/:id', (req, res) => {
   res.status(204).end();
 });
 
-// ---- glossary (persistent source name → target form) ----
-app.get('/api/glossary', (req, res) => res.json({ entries: glossary.list() }));
+// ---- glossary (source name → target form) ----
+// User entries are SHARED (global, data/glossary.json); auto-built entries are
+// PER BOOK (data/logs/<slug>/glossary-auto.json) so one book's characters don't
+// leak into another book's prompts.
+const autoGlossary = (book) => (book ? new GlossaryStore(bookLogs.autoGlossaryPath(bookLogs.slug(book))) : null);
+const readAutoEntries = (book) => {
+  if (!book) return [];
+  try {
+    const d = JSON.parse(fs.readFileSync(bookLogs.autoGlossaryPath(bookLogs.slug(book)), 'utf8'));
+    return Array.isArray(d.entries) ? d.entries.map((e) => ({ ...e })) : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+app.get('/api/glossary', (req, res) => {
+  const book = req.query.book;
+  if (!book) return res.json({ entries: glossary.list() });
+  const users = glossary.list().filter((e) => e.source === 'user');
+  res.json({ entries: [...users, ...readAutoEntries(book)] });
+});
 
 app.post('/api/glossary', (req, res) => {
-  const { src, tgt } = req.body || {};
+  const { src, tgt, book } = req.body || {};
   if (!src || !tgt) return res.status(400).json({ error: 'src and tgt required' });
-  res.status(201).json({ entry: glossary.set(src, tgt, 'user') });
+  const entry = glossary.set(src, tgt, 'user');
+  // Setting/editing a name "promotes" it from the book's auto list to the shared list.
+  if (book) autoGlossary(book).remove(src);
+  res.status(201).json({ entry });
 });
 
 app.put('/api/glossary/:src', (req, res) => {
-  const { tgt } = req.body || {};
+  const { tgt, book } = req.body || {};
   const src = decodeURIComponent(req.params.src);
   if (!tgt) return res.status(400).json({ error: 'tgt required' });
   const entry = glossary.set(src, tgt, 'user');
+  if (book) autoGlossary(book).remove(src);
   res.json({ entry });
 });
 
 app.delete('/api/glossary/:src', (req, res) => {
   const src = decodeURIComponent(req.params.src);
-  res.json({ removed: glossary.remove(src) });
+  const book = req.query.book;
+  let removed = glossary.remove(src);
+  if (book && autoGlossary(book).remove(src)) removed = true;
+  res.json({ removed });
 });
 
-// Extract the book's proper nouns and transliterate the ones not yet in the store.
+// Extract the book's proper nouns and transliterate the missing ones into the
+// book's own auto-glossary.
 app.post('/api/glossary/autobuild', wrap(async (req, res) => {
   const { book, model, promptId, think, limit, sourceLang, targetLang } = req.body || {};
   const bookPath = safeJoin(BOOKS, book);
@@ -163,12 +194,15 @@ app.post('/api/glossary/autobuild', wrap(async (req, res) => {
   const s = settings.get();
   const srcLang = sourceLang || s.sourceLang || 'en';
   const tgtLang = targetLang || s.targetLang || 'fa';
+  const autoStore = autoGlossary(book);
 
   const bookData = await epub.readEpub(bookPath);
-  const textFiles = epub.listTextFiles(bookData.entries);
+  const textFiles = epub.listTextFiles(bookData.entries, bookData.buffers);
   const allText = textFiles.map((f) => bookData.buffers.get(f).toString('utf8'));
   const candidates = extractNames(allText, languages.scriptOf(srcLang));
-  const missing = candidates.filter((n) => !glossary.get(n.name)).slice(0, max);
+  const missing = candidates
+    .filter((n) => !glossary.get(n.name) && !autoStore.get(n.name))
+    .slice(0, max);
 
   let added = 0;
   if (missing.length) {
@@ -178,9 +212,10 @@ app.post('/api/glossary/autobuild', wrap(async (req, res) => {
       targetLang: tgtLang,
     });
     const autos = missing.filter((n) => map[n.name]).map((n) => ({ src: n.name, tgt: map[n.name], freq: n.freq }));
-    added = glossary.merge(autos);
+    added = autoStore.merge(autos);
   }
-  res.json({ added, missing: missing.length, entries: glossary.list() });
+  const users = glossary.list().filter((e) => e.source === 'user');
+  res.json({ added, missing: missing.length, entries: [...users, ...autoStore.list()] });
 }));
 
 // ---- settings (persistent, single source of truth) ----
@@ -199,6 +234,16 @@ app.put('/api/settings', (req, res) => {
   if (b.port != null) patch.port = Math.min(65535, Math.max(1, parseInt(b.port, 10) || 8765));
   if (b.concurrency != null) patch.concurrency = Math.min(8, Math.max(1, parseInt(b.concurrency, 10) || 1));
   if (b.wordsPerRequest != null) patch.wordsPerRequest = Math.min(1000, Math.max(1, parseInt(b.wordsPerRequest, 10) || 1));
+  if (typeof b.lastModel === 'string') patch.lastModel = b.lastModel.trim();
+  if (typeof b.lastPromptId === 'string') patch.lastPromptId = b.lastPromptId.trim();
+  if (b.lastFormat != null) {
+    if (!['epub', 'docx', 'pdf'].includes(b.lastFormat)) return res.status(400).json({ error: 'lastFormat must be epub, docx or pdf' });
+    patch.lastFormat = b.lastFormat;
+  }
+  if (typeof b.lastThink === 'boolean') patch.lastThink = b.lastThink;
+  const page = (v) => (v === '' || v == null ? null : Math.max(1, parseInt(v, 10) || null));
+  if (b.lastFromPage !== undefined) patch.lastFromPage = page(b.lastFromPage);
+  if (b.lastToPage !== undefined) patch.lastToPage = page(b.lastToPage);
   if (patch.sourceLang && !languages.get(patch.sourceLang)) return res.status(400).json({ error: 'unknown source language' });
   if (patch.targetLang && !languages.get(patch.targetLang)) return res.status(400).json({ error: 'unknown target language' });
   if (patch.sourceLang && patch.targetLang && patch.sourceLang === patch.targetLang) {
@@ -256,19 +301,86 @@ app.post('/api/translate/stop', (req, res) => {
   res.json({ stopped: jobs.stop() });
 });
 
-// ---- logs ----
+// ---- logs (per-book when ?book= is given, else the legacy global files) ----
 app.get('/api/log', (req, res) => {
   res.set('Content-Type', 'text/plain; charset=utf-8');
-  res.send(requestsLog.readAll());
+  const book = req.query.book;
+  res.send(book ? bookLogs.readFile(bookLogs.slug(book), 'requests') : requestsLog.readAll());
 });
 app.get('/api/issues', wrap(async (req, res) => {
-  res.json({ issues: await loadIssues(issuesLog.path), count: issuesLog.readAll().split('\n').filter(Boolean).length });
+  const book = req.query.book;
+  const issuesPath = book ? bookLogs.path(bookLogs.slug(book), 'issues') : issuesLog.path;
+  const issues = await loadIssues(issuesPath);
+  res.json({ issues, count: issues.length });
 }));
 // Clear the review state so a completely new job starts with no leftover issues.
 app.post('/api/issues/clear', (req, res) => {
-  try { fs.rmSync(issuesLog.path, { force: true }); } catch (e) { /* ignore */ }
+  const book = (req.query && req.query.book) || (req.body && req.body.book);
+  const issuesPath = book ? bookLogs.path(bookLogs.slug(book), 'issues') : issuesLog.path;
+  try { fs.rmSync(issuesPath, { force: true }); } catch (e) { /* ignore */ }
   res.json({ count: 0 });
 });
+
+// ---- review import (per-book saved translations, replayed without Ollama) ----
+app.get('/api/reviews', (req, res) => {
+  res.json({ reviews: bookLogs.list() });
+});
+app.get('/api/review', (req, res) => {
+  const book = req.query.book;
+  if (!book) return res.status(400).json({ error: 'book parameter is required' });
+  const slug = bookLogs.slug(book);
+  const all = bookLogs.readReview(slug);
+  const meta = bookLogs.metaFromEntries(all);
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  const limit = Math.min(2000, Math.max(1, parseInt(req.query.limit, 10) || 200));
+  res.json({
+    book: meta.book || book,
+    model: meta.model || null,
+    sourceLang: meta.sourceLang || null,
+    targetLang: meta.targetLang || null,
+    runs: meta.runs || 0,
+    total: all.length,
+    offset,
+    limit,
+    entries: all.slice(offset, offset + limit),
+  });
+});
+
+// ---- book pack export/import (hand a book off to another machine) ----
+app.get('/api/book-pack/:slug', wrap(async (req, res) => {
+  const slug = req.params.slug;
+  if (!slug || !/^[A-Za-z0-9_]+$/.test(slug)) return res.status(400).json({ error: 'invalid book slug' });
+  try {
+    const buf = await buildPack({
+      slug,
+      logsDir: path.join(DATA, 'logs'),
+      booksDir: BOOKS,
+      workDir: WORK,
+      dataDir: DATA,
+    });
+    res.set('Content-Type', 'application/zip');
+    res.set('Content-Disposition', `attachment; filename="${slug}-pack.zip"`);
+    res.send(buf);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || String(e) });
+  }
+}));
+
+app.post('/api/book-pack', express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '200mb' }), wrap(async (req, res) => {
+  if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'empty upload — send the .zip body' });
+  try {
+    const r = await importPack(req.body, {
+      logsDir: path.join(DATA, 'logs'),
+      booksDir: BOOKS,
+      workDir: WORK,
+      dataDir: DATA,
+    });
+    bookLogs.forgetAll(); // cached loggers must pick up the newly imported files
+    res.json({ ok: true, slug: r.slug, book: r.book, files: r.wrote });
+  } catch (e) {
+    res.status(400).json({ error: e.message || String(e) });
+  }
+}));
 
 // ---- fix pass (v2) ----
 let fixing = false;
@@ -305,7 +417,7 @@ app.post('/api/fix', wrap(async (req, res) => {
       sourcePath: sourceBook,
       model,
       prompt,
-      issuesPath: issuesLog.path,
+      issuesPath: book ? bookLogs.path(bookLogs.slug(book), 'issues') : issuesLog.path,
       outPath,
       think: !!think,
       emit,
@@ -337,10 +449,12 @@ app.post('/api/paragraph/fix', wrap(async (req, res) => {
   const s = settings.get();
   const srcLang = sourceLang || s.sourceLang || 'en';
   const tgtLang = targetLang || s.targetLang || 'fa';
+  const bookSlug = book ? bookLogs.slug(book) : null;
 
   const bookData = await epub.readEpub(bookPath);
   const result = await fixParagraph({
     bookData,
+    bookName: book,
     file,
     src,
     model,
@@ -352,8 +466,25 @@ app.post('/api/paragraph/fix', wrap(async (req, res) => {
     think: !!think,
     manualTgt: typeof tgt === 'string' ? tgt : null,
     workDir: WORK,
-    issues: issuesLog,
+    issues: bookSlug ? bookLogs.issuesLogger(bookSlug) : issuesLog,
   });
+  // Record the fix in the review tape so a later import shows the corrected
+  // translation (review fixes persist across sessions).
+  if (bookSlug) {
+    try {
+      bookLogs.reviewLogger(bookSlug).append({
+        t: 'fix',
+        data: {
+          ts: new Date().toISOString(),
+          file,
+          src,
+          tgt: result.tgt,
+          model: cacheModel,
+          targetLang: tgtLang,
+        },
+      });
+    } catch (e) { /* ignore */ }
+  }
   // Rebuild the output book(s) from the cache so the fix lands in the file the
   // user downloads.
   const rebuilt = await rebuildOutputs({
@@ -388,18 +519,20 @@ app.post('/api/reset', (req, res) => {
     if (!fs.existsSync(dir)) return 0;
     let n = 0;
     for (const f of fs.readdirSync(dir)) {
-      try { fs.rmSync(path.join(dir, f), { force: true }); n += 1; } catch (e) { /* ignore */ }
+      try { fs.rmSync(path.join(dir, f), { recursive: true, force: true }); n += 1; } catch (e) { /* ignore */ }
     }
     return n;
   };
   const cleared = {
     chapters: clearDir(WORK),
     outputs: clearDir(OUT),
+    reviews: clearDir(path.join(DATA, 'logs')),
     state: (() => { try { fs.rmSync(path.join(DATA, 'state.json'), { force: true }); return true; } catch (e) { return false; } })(),
     requestsLog: (() => { try { fs.rmSync(path.join(DATA, 'requests.log'), { force: true }); return true; } catch (e) { return false; } })(),
     issuesLog: (() => { try { fs.rmSync(path.join(DATA, 'issues.log'), { force: true }); return true; } catch (e) { return false; } })(),
   };
   glossary.clear();
+  bookLogs.forgetAll(); // cached loggers point at the now-deleted data/logs/
   jobs.saved = null;
   res.json({ cleared });
 });

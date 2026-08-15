@@ -23,6 +23,8 @@ const API = (() => {
       return {};
     }
   }
+  // Optional ?book= filter for the per-book logs.
+  const q = (book) => (book ? '?book=' + encodeURIComponent(book) : '');
   return {
     books: () => get('/api/books'),
     models: () => get('/api/models'),
@@ -40,24 +42,37 @@ const API = (() => {
     start: (cfg) => post('/api/translate/start', cfg),
     stop: () => post('/api/translate/stop'),
     status: () => get('/api/translate/status'),
-    issues: () => get('/api/issues'),
-    clearIssues: () => fetch('/api/issues/clear', { method: 'POST' }).then((r) => r.json()),
+    issues: (book) => get('/api/issues' + q(book)),
+    clearIssues: (book) => fetch('/api/issues/clear' + q(book), { method: 'POST' }).then((r) => r.json()),
     fix: (cfg) => post('/api/fix', cfg),
     fixParagraph: (cfg) => post('/api/paragraph/fix', cfg),
     outList: () => get('/api/out'),
-    getLog: async () => {
-      const r = await fetch('/api/log');
+    reviews: () => get('/api/reviews'),
+    review: (slug, offset, limit) => {
+      let u = '/api/review?book=' + encodeURIComponent(slug);
+      if (offset != null) u += '&offset=' + offset;
+      if (limit != null) u += '&limit=' + limit;
+      return get(u);
+    },
+    importPack: (blob) =>
+      fetch('/api/book-pack', {
+        method: 'POST',
+        headers: { 'content-type': 'application/zip' },
+        body: blob,
+      }).then((r) => r.json()),
+    getLog: async (book) => {
+      const r = await fetch('/api/log' + q(book));
       return r.text();
     },
-    glossary: () => get('/api/glossary'),
-    setGlossary: (src, tgt) => post('/api/glossary', { src, tgt }),
-    updateGlossary: (src, tgt) =>
+    glossary: (book) => get('/api/glossary' + q(book)),
+    setGlossary: (src, tgt, book) => post('/api/glossary', { src, tgt, book }),
+    updateGlossary: (src, tgt, book) =>
       fetch(`/api/glossary/${encodeURIComponent(src)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ tgt }),
+        body: JSON.stringify({ tgt, book }),
       }).then((r) => r.json()),
-    deleteGlossary: (src) => fetch(`/api/glossary/${encodeURIComponent(src)}`, { method: 'DELETE' }),
+    deleteGlossary: (src, book) => fetch(`/api/glossary/${encodeURIComponent(src)}` + q(book), { method: 'DELETE' }),
     autobuildGlossary: (cfg) => post('/api/glossary/autobuild', cfg),
     settings: () => get('/api/settings'),
     setSettings: (s) =>

@@ -35,7 +35,6 @@ You also need one of these:
 ## Install & run
 
 ```bash
-cd app
 npm install
 node server.js
 ```
@@ -102,7 +101,7 @@ startup, and `LLM_API_KEY` sets the key.
 
 ## Use it
 
-1. Drop `.epub` files into `app/books/`.
+1. Drop `.epub` files into `books/`.
 2. Pick the **book**, **model**, and **prompt** in the header.
 3. Set the **source → target** languages (default English → Persian).
 4. Optionally restrict the range — "only page 12", or pages 12–13 (~250
@@ -111,7 +110,7 @@ startup, and `LLM_API_KEY` sets the key.
    target text streaming in live, then settling into clean source / target pairs.
 6. Choose the output **format**: EPUB (native), Word `.docx`, or PDF.
 
-Output files land in `app/out/` as `<book>_<lang>.epub` (e.g. `Book_fa.epub` for
+Output files land in `out/` as `<book>_<lang>.epub` (e.g. `Book_fa.epub` for
 Persian, `Book_fr.epub` for French) and are linked in the stats bar.
 
 ---
@@ -121,11 +120,11 @@ Persian, `Book_fr.epub` for French) and are linked in the stats bar.
 A stopped job resumes from where it left off — even across machine restarts.
 
 - After every completed request the translated chapter is written to
-  `app/work/<model>__<targetLang>__<chapter>.xhtml`. On the next run, blocks marked
+  `work/<model>__<targetLang>__<chapter>.xhtml`. On the next run, blocks marked
   `data-t="1"` (already translated) are reused as-is. The marker makes resume exact
   even for **same-script pairs** (e.g. English→French) where a script heuristic
   can't tell source from target.
-- `app/data/state.json` records the job, and the resume banner in the UI restores
+- `data/state.json` records the job, and the resume banner in the UI restores
   the book/model/language/range for you.
 - Switching the model or target language re-translates (the cache key includes
   both). After upgrading from an older version, the first run re-translates from
@@ -236,7 +235,7 @@ rm -f work/*.xhtml
 ```
 
 Streaming: `curl -s -N http://localhost:8765/events` shows `token` deltas of plain
-target-language text. Output: `unzip -t app/out/*.epub`; verify `lang="<target>"`
+target-language text. Output: `unzip -t out/*.epub`; verify `lang="<target>"`
 and (for RTL targets) `dir="rtl"` on `<html>`.
 
 Do not run long test translations on a live dashboard the user is driving — stop
