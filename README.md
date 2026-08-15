@@ -12,6 +12,38 @@ requests to whichever LLM provider you configure.
 
 ---
 
+## Quick start
+
+Fastest path from nothing to a translated book:
+
+```bash
+cd app
+npm install
+node server.js            # dashboard at http://localhost:8765
+```
+
+Then translate either way:
+
+- **In the browser** — open `http://localhost:8765`, pick a **book** (drop `.epub` files into
+  `app/books/` first), a **model**, and a **prompt**, then press **Start**. The output lands in
+  `app/out/`.
+- **Headless — no browser** — `curl` the server (it must be running). Whole book:
+
+  ```bash
+  curl -s -X POST http://localhost:8765/api/translate/start \
+    -H 'content-type: application/json' \
+    -d '{"book":"Book.epub","model":"gemma4:e4b","promptId":"compact-v1","think":false,"format":"epub"}'
+  ```
+
+  The job keeps translating server-side after the command exits; check progress with
+  `curl -s http://localhost:8765/api/translate/status`. See **Run it headlessly** below for the
+  full list of options.
+
+First-time setup (Ollama or an OpenAI-compatible API key, target-language fonts) and host/port
+configuration are in **Prerequisites** and **Configure** below.
+
+---
+
 ## Prerequisites
 
 **Node.js ≥ 18** (Express 5 requires it) plus one LLM provider:
