@@ -253,6 +253,36 @@
 .panel-actions { display: flex; align-items: center; gap: 10px; }
 .saved-hint { font-size: 12px; color: var(--accent); }
 
+/* ---- thinking panel (live reasoning window) ---- */
+.think-panel { width: 440px; }
+.think-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-faint); }
+.think-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex: none; }
+.think-status.think-thinking .dot { background: var(--gold); animation: pulse 1.5s ease-in-out infinite; }
+.think-status.think-done .dot { background: var(--accent); }
+.think-status.think-disabled .dot { background: var(--text-faint); }
+.think-status.think-stopped .dot { background: var(--text-faint); }
+.think-status.think-error .dot { background: var(--danger); }
+.think-actions { display: flex; align-items: center; gap: 6px; }
+.think-list { display: flex; flex-direction: column; gap: 10px; }
+.think-block { border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
+.think-block-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; background: var(--surface); border-bottom: 1px solid var(--line); font-size: 11px; color: var(--text-faint); }
+.think-file { font-weight: 600; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.think-model { font-family: var(--font-mono); }
+.think-text {
+  margin: 0; padding: 9px 11px; max-height: 220px; overflow-y: auto;
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55;
+  color: var(--text-dim); white-space: pre-wrap; word-break: break-word;
+  background: var(--bg); border-bottom: 1px dashed var(--line);
+}
+.think-out-label { font-size: 9.5px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--text-faint); padding: 6px 10px 2px; }
+.think-output { padding: 0 10px 10px; font-size: 13px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.think-btn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); display: inline-block; margin-right: 6px; vertical-align: middle; }
+.think-btn.think-thinking .dot { background: var(--gold); animation: pulse 1.5s ease-in-out infinite; }
+.think-btn.think-done .dot { background: var(--accent); }
+.think-btn.think-disabled .dot { background: var(--text-faint); }
+.think-btn.think-stopped .dot { background: var(--text-faint); }
+.think-btn.think-error .dot { background: var(--danger); }
+
 /* ---- glossary panel ---- */
 .panel-note { font-size: 11.5px; color: var(--text-faint); margin: 0 0 4px; line-height: 1.5; }
 .psearch { flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; }
@@ -296,7 +326,7 @@
 
 @media (max-width: 900px) {
   .statsbar { grid-template-columns: repeat(2, 1fr); }
-  .prompt-panel { width: 100%; border-left: none; border-top: 1px solid var(--line); }
+  .prompt-panel, .think-panel { width: 100%; border-left: none; border-top: 1px solid var(--line); }
   .main { flex-direction: column; }
   .feed { order: 1; }
 }

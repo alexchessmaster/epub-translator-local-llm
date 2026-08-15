@@ -2,7 +2,7 @@
 
 const Stream = (() => {
   const EVENTS = [
-    'connected', 'job', 'queue', 'request', 'token', 'response', 'progress',
+    'connected', 'job', 'queue', 'request', 'token', 'think', 'response', 'progress',
     'file', 'done', 'error', 'glossary', 'log', 'fix', 'fix-done',
   ];
 

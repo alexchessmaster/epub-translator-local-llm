@@ -27,6 +27,7 @@
       <button id="editPrompt" class="btn ghost" title="Edit prompts" type="button">✎</button>
       <button id="glossaryBtn" class="btn ghost" title="Name glossary" type="button">Names</button>
       <button id="settingsBtn" class="btn ghost" title="Server, provider & language settings" type="button">⚙ Settings</button>
+      <button id="thinkBtn" class="btn ghost think-btn think-idle" title="Live reasoning window" type="button"><span class="dot"></span> Thinking</button>
       <label class="field">Format
         <select id="formatSel">
           <option value="epub">EPUB</option>
@@ -150,6 +151,20 @@
         <button id="gAddBtn" class="btn mini" type="button">Add</button>
       </div>
       <div id="glossaryList" class="glossary-list"></div>
+    </aside>
+
+    <aside id="thinkPanel" class="prompt-panel think-panel" hidden>
+      <div class="panel-head">
+        <h2>Thinking</h2>
+        <span id="thinkStatus" class="think-status think-idle">
+          <span class="dot"></span><span class="think-status-label">idle</span>
+        </span>
+        <div class="think-actions">
+          <button id="clearThink" class="btn mini" type="button" title="Clear this window">Clear</button>
+          <button id="closeThink" class="btn ghost" type="button" title="Close">✕</button>
+        </div>
+      </div>
+      <div id="thinkList" class="think-list"></div>
     </aside>
   </main>
 
