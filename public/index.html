@@ -42,6 +42,13 @@
       </span>
       <button id="startBtn" class="btn primary" type="button">Start</button>
       <button id="stopBtn" class="btn danger" type="button" disabled>Stop</button>
+      <span class="head-actions">
+        <button id="rawToggle" class="btn ghost" type="button" title="Request log — every model call">Request log</button>
+        <button id="reviewBtn" class="btn ghost" type="button" title="Review — replay a book's translation cards, no model calls">Review</button>
+        <button id="exportImportBtn" class="btn ghost" type="button" title="Export / Import a book pack">Export / Import</button>
+        <button id="serverLogToggle" class="btn ghost" type="button" title="Server log">Server log</button>
+        <button id="resetBtn" class="btn danger" type="button" title="Reset everything (all books)">Reset</button>
+      </span>
     </div>
   </header>
 
@@ -172,16 +179,7 @@
   <footer class="foot">
     Start a translation and every request appears here the moment it's sent — the
     target text streams in live, then settles into source / target pairs. A stopped
-    job resumes from where it left off;
-    <button id="rawToggle" class="link-btn" type="button">request log</button>
-    <span class="foot-sep">·</span>
-    <button id="reviewBtn" class="link-btn" type="button">Review</button>
-    <span class="foot-sep">·</span>
-    <button id="serverLogToggle" class="link-btn" type="button">Server log</button>
-    <span class="foot-sep">·</span>
-    <button id="exportImportBtn" class="link-btn" type="button" title="Export a book to another computer, or import a book pack">Export / Import</button>
-    <span class="foot-sep">·</span>
-    <button id="resetBtn" class="link-btn danger-link" type="button">reset book</button>
+    job resumes from where it left off.
   </footer>
 
   <section id="settingsPanel" class="settings-overlay" hidden>
@@ -237,6 +235,27 @@
       <div class="panel-actions">
         <button id="saveSettings" class="btn primary" type="button">Save</button>
         <span id="settingsSavedMsg" class="saved-hint"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="resetPanel" class="settings-overlay" hidden>
+    <div class="settings-modal reset-modal">
+      <div class="panel-head">
+        <h2>Reset everything?</h2>
+        <button id="closeReset" class="btn ghost" type="button">✕</button>
+      </div>
+      <p class="reset-danger">This permanently deletes ALL books' data:</p>
+      <ul>
+        <li>every book's translations and review tape (<code>data/logs/…</code>)</li>
+        <li>all output files (<code>app/out/</code>) and the work cache (<code>app/work/</code>)</li>
+        <li>the shared name glossary (<code>data/glossary.json</code>)</li>
+        <li>request &amp; issue logs, and the saved job state</li>
+      </ul>
+      <p class="panel-note">Your settings and prompts are kept.</p>
+      <div class="panel-actions">
+        <button id="resetCancel" class="btn" type="button">Cancel</button>
+        <button id="resetConfirm" class="btn danger" type="button">Reset everything</button>
       </div>
     </div>
   </section>
