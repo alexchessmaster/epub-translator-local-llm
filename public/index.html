@@ -261,6 +261,24 @@
     </div>
   </section>
 
+  <section id="fixModal" class="settings-overlay" hidden>
+    <div class="settings-modal fix-modal">
+      <div class="panel-head">
+        <h2>Fix flagged paragraphs</h2>
+        <button id="closeFixModal" class="btn ghost" type="button">✕</button>
+      </div>
+      <p>Re-translate <strong id="fixModalCount">0</strong> flagged paragraph(s) from the issues log.</p>
+      <label class="pfield">Model
+        <select id="fixModalModel"></select>
+      </label>
+      <p class="panel-note">Defaults to the model selected above — pick another to fix with a different model.</p>
+      <div class="panel-actions">
+        <button id="fixModalCancel" class="btn" type="button">Cancel</button>
+        <button id="fixModalRun" class="btn primary" type="button">Run fix pass</button>
+      </div>
+    </div>
+  </section>
+
   <section id="rawPanel" class="rawpanel" hidden>
     <div class="rawhead">
       <span>Request log — every model call</span>

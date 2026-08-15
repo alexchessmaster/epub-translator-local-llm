@@ -22,7 +22,7 @@ const { runFix, loadIssues } = require('./lib/fixer');
 const { fixParagraph, rebuildOutputs } = require('./lib/editor');
 const { BookLogs } = require('./lib/booklogs');
 const { buildPack, importPack } = require('./lib/bookpack');
-const { extractNames, buildGlossary } = require('./lib/translator');
+const { extractNames, buildGlossary, findCachePath, findCacheModel } = require('./lib/translator');
 const { buildTableHtml, collectPairs } = require('./lib/exporttable');
 const sse = require('./lib/sse');
 
@@ -250,6 +250,7 @@ app.put('/api/settings', (req, res) => {
   if (b.concurrency != null) patch.concurrency = Math.min(8, Math.max(1, parseInt(b.concurrency, 10) || 1));
   if (b.wordsPerRequest != null) patch.wordsPerRequest = Math.min(1000, Math.max(1, parseInt(b.wordsPerRequest, 10) || 1));
   if (typeof b.lastModel === 'string') patch.lastModel = b.lastModel.trim();
+  if (typeof b.lastFixModel === 'string') patch.lastFixModel = b.lastFixModel.trim();
   if (typeof b.lastPromptId === 'string') patch.lastPromptId = b.lastPromptId.trim();
   if (b.lastFormat != null) {
     if (!['epub', 'docx', 'pdf'].includes(b.lastFormat)) return res.status(400).json({ error: 'lastFormat must be epub, docx or pdf' });
@@ -421,7 +422,7 @@ app.get('/api/export/html', (req, res) => {
   res.send(html);
 });
 
-// ---- fix pass (v2) ----
+// ---- fix pass ----
 let fixing = false;
 app.post('/api/fix', wrap(async (req, res) => {
   if (jobs.isRunning()) return res.status(409).json({ error: 'a translation is running' });
@@ -436,36 +437,75 @@ app.post('/api/fix', wrap(async (req, res) => {
   const srcLang = sourceLang || s.sourceLang || 'en';
   const tgtLang = targetLang || s.targetLang || 'fa';
 
-  // Find the latest translated output to patch. The Fix pass rebuilds an EPUB, so
-  // it needs an .epub output — DOCX/PDF exports have no v1 EPUB to patch.
-  const outs = (fs.existsSync(OUT) ? fs.readdirSync(OUT) : []).filter((f) => new RegExp('_' + tgtLang + '\\.epub$', 'i').test(f));
-  if (!outs.length) {
-    return res.status(400).json({
-      error: `no _${tgtLang}.epub to fix — the Fix pass patches EPUB outputs only. Export the book as EPUB, then Fix re-translates the flagged paragraphs and writes _${tgtLang}_v2.epub.`,
-    });
-  }
-  const v1Path = path.join(OUT, outs[0]);
-
   fixing = true;
   res.json({ state: 'fixing' });
   const emit = (t, d) => sse.broadcast(t, d);
-  const outPath = v1Path.replace(/\.epub$/i, '_v2.epub');
+  const provider = getProvider(settings);
   try {
     const r = await runFix({
-      v1Path,
-      sourcePath: sourceBook,
       model,
       prompt,
       issuesPath: book ? bookLogs.path(bookLogs.slug(book), 'issues') : issuesLog.path,
-      outPath,
       think: !!think,
       emit,
       signal: null,
-      provider: getProvider(settings),
+      provider,
       sourceLang: srcLang,
       targetLang: tgtLang,
     });
-    emit('fix-done', { fixed: r.fixed, total: r.total, outPath: r.outPath });
+    const fixedItems = r.fixedItems || [];
+    if (fixedItems.length) {
+      const bookData = await epub.readEpub(sourceBook);
+      const bookName = path.basename(sourceBook);
+      const bookSlug = book ? bookLogs.slug(book) : null;
+      let lastModel = null, wrote = 0;
+      for (const item of fixedItems) {
+        const cacheModel = item.model || findCacheModel(WORK, bookName, tgtLang, item.file) || model;
+        let ok = false, res = null;
+        try {
+          res = await fixParagraph({
+            bookData, bookName, file: item.file, src: item.src, model,
+            cacheModel, sourceLang: srcLang, targetLang: tgtLang,
+            provider, prompt, think: !!think,
+            manualTgt: item.rawTgt, // RAW with placeholder tokens — fixParagraph restores markup
+            workDir: WORK, issues: null,
+          });
+          ok = true; wrote += 1; lastModel = cacheModel;
+        } catch (e) { /* no cache chapter for this model — tape/feed still show the fix */ }
+        if (bookSlug) {
+          try {
+            bookLogs.reviewLogger(bookSlug).append({
+              t: 'fix',
+              data: {
+                ts: new Date().toISOString(),
+                file: item.file,
+                src: item.src,
+                tgt: ok ? res.tgt : item.tgt, // display form either way
+                model: cacheModel,
+                targetLang: tgtLang,
+              },
+            });
+          } catch (e) { /* ignore */ }
+        }
+      }
+      if (lastModel && wrote) {
+        try {
+          // Rebuild only when the resolved model's cache covers everything that any
+          // model cached — otherwise a partial cache could overwrite a good output
+          // with mixed English/Persian. Untranslated chapters (no cache at all) are
+          // fine: they fall back to the source either way.
+          const files = epub.listTextFiles(bookData.entries, bookData.buffers);
+          const covered = files.every((f) => {
+            if (!findCacheModel(WORK, bookName, tgtLang, f)) return true; // never cached — fine
+            return !!findCachePath(bookName, lastModel, tgtLang, f, WORK);
+          });
+          if (covered) await rebuildOutputs({ bookData, bookName, model: lastModel, targetLang: tgtLang, workDir: WORK, outDir: OUT });
+        } catch (e) { /* rebuild is best-effort */ }
+      }
+    }
+    // Remove the stale versioned file from the old fix pass — one output only.
+    try { fs.rmSync(path.join(OUT, path.basename(sourceBook).replace(/\.epub$/i, '') + '_' + tgtLang + '_v2.epub'), { force: true }); } catch (e) {}
+    emit('fix-done', { fixed: r.fixed, total: r.total });
   } catch (e) {
     emit('fix-done', { error: e.message || String(e) });
   } finally {
