@@ -182,7 +182,7 @@
 /* ---- raw log panel (fixed-height, scrollable) ---- */
 .rawpanel {
   flex: none;
-  height: 260px;
+  height: 300px;
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--line);
@@ -200,6 +200,36 @@
   color: var(--text-dim); white-space: pre-wrap; word-break: break-all;
   overflow-y: auto; overflow-x: hidden;
 }
+
+/* request-log panel — structured table + tools */
+.rawhead { flex-wrap: wrap; gap: 6px; }
+.raw-tools { display: flex; align-items: center; gap: 6px; }
+.log-search {
+  width: 180px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 3px 8px; font-size: 12px;
+}
+.log-phase {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 3px 6px; font-size: 12px;
+}
+.log-table-wrap { flex: 1; overflow: auto; }
+.log-table {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-mono); font-size: 11px;
+}
+.log-table th {
+  position: sticky; top: 0; background: var(--surface); color: var(--text-faint);
+  text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line);
+  font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.log-table td {
+  padding: 3px 8px; border-bottom: 1px solid var(--line);
+  color: var(--text-dim); vertical-align: top;
+}
+.log-table td.snip { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-row.bad td { color: var(--danger); }
 
 /* review import panel — saved per-book translations */
 .review-list {

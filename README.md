@@ -144,6 +144,28 @@ A stopped job resumes from where it left off — even across machine restarts.
   both). After upgrading from an older version, the first run re-translates from
   scratch because old cache keys no longer match — that's expected.
 
+## After Ctrl+C → npm start (resume, logs, review)
+
+Stopping the server (Ctrl+C) loses nothing — every run's data lives on disk and the
+dashboard picks it back up on the next `npm start`.
+
+1. **Resume** — the banner shows the paused job's % and settings; **Resume** continues
+   from the last saved batch (the chapter cache reuses `data-t="1"` blocks, so it
+   resumes exactly where it left off).
+2. **Open in Review** — the same banner has an **Open in Review** button: loads that
+   book's saved translation cards as editable cards with **zero model calls** — no
+   resume required.
+3. **Request log** (footer → **request log**) — every model call as a searchable,
+   filterable table: time, model, file, phase (request / response / error), duration,
+   snippet. Toggle **Raw** for the underlying JSONL
+   (`data/logs/<slug>/requests.jsonl`). New calls append live while the panel is open.
+4. **Server log** (footer → **Server log**) — the server's own stdout/stderr
+   (`data/logs/server.log`, capped at 2 MB) kept across restarts; auto-refreshes while
+   open.
+5. **Edit** — on any card (live or replayed): **✎ Edit** → edit the target inline →
+   **Save**, or **↻ Re-translate** with another model. Changes are written back to the
+   work cache and the output book is rebuilt automatically.
+
 ## The glossary (proper names)
 
 The **Names** panel holds a persistent source-name → target-form map. Names you add
@@ -209,8 +231,8 @@ Design notes:
 - `POST /api/translate/start` `{book, model, promptId, think, fromPage/toPage or
   fromWord/toWord, format, sourceLang?, targetLang?}` ·
   `POST /api/translate/stop` · `GET /api/translate/status`
-- `GET /api/log` (raw requests.log) · `GET /api/issues` · `POST /api/issues/clear` ·
-  `POST /api/fix`
+- `GET /api/server-log` (server stdout/stderr tail) · `GET /api/log` (raw requests.log) ·
+  `GET /api/issues` · `POST /api/issues/clear` · `POST /api/fix`
 - `POST /api/reset` (wipe translations, glossary, logs, outputs, state; keeps
   settings/prompts)
 - `GET /events` (SSE) · `GET /api/out` · `GET /api/out/:name`

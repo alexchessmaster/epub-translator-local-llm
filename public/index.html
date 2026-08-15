@@ -96,6 +96,7 @@
   <div id="resumeBanner" class="resume-banner" hidden>
     <span class="resume-text"></span>
     <button id="resumeBtn" class="btn primary mini" type="button">Resume</button>
+    <button id="openReviewBtn" class="btn ghost mini" type="button">Open in Review</button>
     <button id="dismissBanner" class="btn ghost mini" type="button">Dismiss</button>
   </div>
   </div><!-- /sticky-head -->
@@ -176,6 +177,8 @@
     <span class="foot-sep">·</span>
     <button id="reviewBtn" class="link-btn" type="button">Review</button>
     <span class="foot-sep">·</span>
+    <button id="serverLogToggle" class="link-btn" type="button">Server log</button>
+    <span class="foot-sep">·</span>
     <button id="exportImportBtn" class="link-btn" type="button" title="Export a book to another computer, or import a book pack">Export / Import</button>
     <span class="foot-sep">·</span>
     <button id="resetBtn" class="link-btn danger-link" type="button">reset book</button>
@@ -241,9 +244,35 @@
   <section id="rawPanel" class="rawpanel" hidden>
     <div class="rawhead">
       <span>Request log — every model call</span>
-      <button id="closeRaw" class="btn mini" type="button">✕</button>
+      <div class="raw-tools">
+        <input type="search" id="logSearch" class="log-search" placeholder="search…">
+        <select id="logPhase" class="log-phase">
+          <option value="all">all</option>
+          <option value="request">request</option>
+          <option value="response">response</option>
+          <option value="error">error</option>
+        </select>
+        <button id="logRawToggle" class="btn mini" type="button">Raw</button>
+        <button id="closeRaw" class="btn mini" type="button">✕</button>
+      </div>
     </div>
-    <pre id="rawlog" class="rawlog"></pre>
+    <div id="logTableWrap" class="log-table-wrap">
+      <table class="log-table">
+        <thead>
+          <tr><th>time</th><th>model</th><th>file</th><th>phase</th><th>dur</th><th>snippet</th></tr>
+        </thead>
+        <tbody id="logTbody"></tbody>
+      </table>
+    </div>
+    <pre id="rawlog" class="rawlog" hidden></pre>
+  </section>
+
+  <section id="serverLogPanel" class="rawpanel" hidden>
+    <div class="rawhead">
+      <span>Server log — stdout/stderr (survives restarts)</span>
+      <button id="closeServerLog" class="btn mini" type="button">✕</button>
+    </div>
+    <pre id="serverLog" class="rawlog"></pre>
   </section>
 
   <section id="reviewPanel" class="rawpanel" hidden>

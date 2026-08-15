@@ -13,6 +13,7 @@ const { getProvider, resolveConfig, makeProvider, effectiveConfig } = require('.
 const epub = require('./lib/epub');
 const languages = require('./lib/languages');
 const { JsonlLogger } = require('./lib/logger');
+const { ServerLog } = require('./lib/servelog');
 const { PromptStore } = require('./lib/prompts');
 const { GlossaryStore } = require('./lib/glossary');
 const { SettingsStore } = require('./lib/settings');
@@ -31,6 +32,19 @@ const WORK = path.join(APP_DIR, 'work');
 const OUT = path.join(APP_DIR, 'out');
 
 for (const d of [DATA, BOOKS, WORK, OUT]) fs.mkdirSync(d, { recursive: true });
+
+// Tee the server's own stdout/stderr into data/logs/server.log so the console
+// output (boot banner, provider errors, crashes) survives restarts. Installed
+// before any console.log so the whole session is captured.
+const serverLog = new ServerLog(path.join(DATA, 'logs', 'server.log'));
+for (const stream of [process.stdout, process.stderr]) {
+  const orig = stream.write.bind(stream);
+  stream.write = (chunk, enc, cb) => {
+    if (typeof enc === 'function') { cb = enc; enc = 'utf8'; }
+    serverLog.write(chunk);
+    return orig(chunk, enc, cb);
+  };
+}
 
 // Settings are loaded before host/port so the server binds to what the panel says.
 const settings = new SettingsStore(path.join(DATA, 'settings.json'));
@@ -302,6 +316,11 @@ app.post('/api/translate/stop', (req, res) => {
 });
 
 // ---- logs (per-book when ?book= is given, else the legacy global files) ----
+// The server's own stdout/stderr (teed into data/logs/server.log) — survives restarts.
+app.get('/api/server-log', (req, res) => {
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.send(serverLog.readTail(parseInt(req.query.tail, 10) || 200000));
+});
 app.get('/api/log', (req, res) => {
   res.set('Content-Type', 'text/plain; charset=utf-8');
   const book = req.query.book;

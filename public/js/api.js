@@ -64,6 +64,10 @@ const API = (() => {
       const r = await fetch('/api/log' + q(book));
       return r.text();
     },
+    getServerLog: async () => {
+      const r = await fetch('/api/server-log');
+      return r.text();
+    },
     glossary: (book) => get('/api/glossary' + q(book)),
     setGlossary: (src, tgt, book) => post('/api/glossary', { src, tgt, book }),
     updateGlossary: (src, tgt, book) =>
