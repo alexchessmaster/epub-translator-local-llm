@@ -23,6 +23,7 @@ const { fixParagraph, rebuildOutputs } = require('./lib/editor');
 const { BookLogs } = require('./lib/booklogs');
 const { buildPack, importPack } = require('./lib/bookpack');
 const { extractNames, buildGlossary } = require('./lib/translator');
+const { buildTableHtml, collectPairs } = require('./lib/exporttable');
 const sse = require('./lib/sse');
 
 const APP_DIR = __dirname;
@@ -400,6 +401,25 @@ app.post('/api/book-pack', express.raw({ type: ['application/zip', 'application/
     res.status(400).json({ error: e.message || String(e) });
   }
 }));
+
+// ---- export the whole translation as one HTML table (source left / target right) ----
+app.get('/api/export/html', (req, res) => {
+  const book = req.query.book;
+  if (!book) return res.status(400).json({ error: 'book parameter is required' });
+  const slug = bookLogs.slug(book);
+  const entries = bookLogs.readReview(slug);
+  const meta = bookLogs.metaFromEntries(entries);
+  const html = buildTableHtml({
+    book: meta.book || book,
+    model: meta.model || null,
+    sourceLang: meta.sourceLang || 'en',
+    targetLang: meta.targetLang || 'fa',
+    pairs: collectPairs(entries),
+  });
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${slug}-translation.html"`);
+  res.send(html);
+});
 
 // ---- fix pass (v2) ----
 let fixing = false;
