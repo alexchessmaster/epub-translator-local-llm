@@ -42,12 +42,15 @@
       </span>
       <button id="startBtn" class="btn primary" type="button">Start</button>
       <button id="stopBtn" class="btn danger" type="button" disabled>Stop</button>
+      <button id="buildNamesBtn" class="btn ghost" type="button" title="Build this book's name glossary now, so you can review and fix the names BEFORE translating — then press Start">Build names first</button>
       <span class="head-actions">
         <button id="rawToggle" class="btn ghost" type="button" title="Request log — every model call">Request log</button>
         <button id="reviewBtn" class="btn ghost" type="button" title="Review — replay a book's translation cards, no model calls">Review</button>
+        <button id="findBtn" class="btn ghost" type="button" title="Find any text in this book's source, feed, or exported content — jump to it or edit it">Find</button>
         <button id="exportImportBtn" class="btn ghost" type="button" title="Export / Import a book pack">Export / Import</button>
         <button id="serverLogToggle" class="btn ghost" type="button" title="Server log">Server log</button>
         <button id="exportTableBtn" class="btn ghost" type="button" title="Download the whole translation as one HTML file — English left, Persian right">Export HTML</button>
+        <button id="markupToggle" class="btn ghost" type="button" title="Show or hide markup tokens (⟦s0⟧ ⟦e0⟧ ⟦1⟧) in the cards and in the HTML export" aria-pressed="false">⟦⟧ Markup</button>
         <button id="resetBtn" class="btn danger" type="button" title="Reset everything (all books)">Reset</button>
       </span>
     </div>
@@ -153,6 +156,15 @@
       <div class="panel-versions">
         <input type="search" id="glossarySearch" class="psearch" placeholder="filter names…">
         <button id="autobuildBtn" class="btn mini primary" type="button">Auto-build</button>
+        <button id="verifyBtn" class="btn mini" type="button">Verify names</button>
+      </div>
+      <div class="glossary-verify">
+        <textarea id="verifyPrompt" rows="5" spellcheck="false" placeholder="Verify prompt…"></textarea>
+        <div class="glossary-verify-actions">
+          <button id="saveVerifyPrompt" class="btn mini" type="button">Save prompt</button>
+          <button id="resetVerifyPrompt" class="btn mini" type="button">Reset to default</button>
+        </div>
+        <div id="verifyProgress" class="verify-progress" hidden></div>
       </div>
       <div class="glossary-add">
         <input id="gAddSrc" type="text" placeholder="Source name">
@@ -321,6 +333,18 @@
       <button id="closeReview" class="btn mini" type="button">✕</button>
     </div>
     <div id="reviewList" class="review-list"></div>
+  </section>
+
+  <section id="findPanel" class="rawpanel" hidden>
+    <div class="rawhead">
+      <span>Find — search this book's source, feed, and exported content</span>
+      <div class="raw-tools">
+        <input type="search" id="findInput" class="log-search" placeholder="search English or Persian…" autocomplete="off">
+        <span id="findCount" class="range-hint"></span>
+        <button id="closeFind" class="btn mini" type="button">✕</button>
+      </div>
+    </div>
+    <div id="findList" class="find-list"></div>
   </section>
 
   <section id="transferPanel" class="rawpanel" hidden>

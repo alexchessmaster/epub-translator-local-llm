@@ -313,7 +313,10 @@
         try {
           const r = await API.fixParagraph({ ...baseCfg(), src: p.flat, model });
           if (r && r.ok) {
-            p.tgt.textContent = r.tgt;
+            // Render the raw (token-bearing) text through the markup-wrapping path
+            // so the ⟦⟧ toggle controls visibility and a later Edit+Save keeps the
+            // markup (textContent still carries the tokens).
+            Render.setContent(p.tgt, r.tgt);
             p.tgt.dataset.orig = r.tgt;
             p.tgt.classList.remove('inflight', 'kept');
             p.tgt.classList.add('fixed');
@@ -475,6 +478,8 @@
       savedThink = r.lastThink != null ? r.lastThink : null;
       savedFrom = r.lastFromPage != null ? r.lastFromPage : null;
       savedTo = r.lastToPage != null ? r.lastToPage : null;
+      verifyNamesDefault = r.verifyNamesDefault || '';
+      $('verifyPrompt').value = r.verifyNamesPrompt || verifyNamesDefault || '';
       syncLangSelects();
       gateReasoning(r.provider || 'ollama');
       const eff = r.effective || {};
@@ -601,6 +606,8 @@
   async function boot() {
     const [b, m, p, st, langs] = await Promise.all([API.books(), API.models(), API.prompts(), API.status(), API.languages()]);
     Render.setLangs(langs.languages);
+    // Restore the show/hide-markup display preference (local, display-only).
+    if (localStorage.getItem('fountain-show-markup') === '1') setMarkup(true);
     populateLanguages(langs.languages);
     await loadSettings();
     wireSettings();
@@ -778,6 +785,16 @@
       flash(`finished in ${Render.fmtEta(ev.elapsedSec)} → ${shortName(ev.outPath)}${note}`);
     },
     glossary: (ev) => { if (ev.count) flash(`glossary: ${ev.count} names`); },
+    'glossary-progress': (ev) => {
+      const el = $('verifyProgress');
+      if (!el) return;
+      if (ev && ev.total) {
+        el.textContent = `verifying names… ${ev.done}/${ev.total}`;
+        el.hidden = false;
+      } else {
+        el.hidden = true;
+      }
+    },
     fix: (ev) => {
       // A paragraph was successfully re-translated by the fix pass — update its
       // card in place and drop it from the flagged map so the chip clears live.
@@ -1115,6 +1132,7 @@
     if (logPanelOpen) {
       API.getLog(activeBook()).then((t) => { seedLog(t); renderLogView(); }).catch(() => {});
     }
+    if (findOpen) runFind(); // the Find panel is scoped to the current book
   });
   $('modelSel').addEventListener('change', () => {
     API.setSettings({ lastModel: $('modelSel').value }).catch(() => {});
@@ -1466,6 +1484,87 @@
     importPackFile(f);
   });
 
+  // find panel — search a book's source/feed/cache and edit any paragraph
+  let findDebounce = null;
+  let findOpen = false;
+  function renderFindResults(r) {
+    const list = $('findList');
+    list.textContent = '';
+    const rows = (r && r.results) || [];
+    $('findCount').textContent = rows.length
+      ? `${rows.length} match${rows.length === 1 ? '' : 'es'}${r && r.truncated ? ' (truncated)' : ''}`
+      : 'no matches';
+    const q = ($('findInput').value || '').trim();
+    const baseCfg = (row) => ({
+      book: activeBook(),
+      file: row.file,
+      src: row.src,
+      cacheModel: row.cacheModel || row.model || $('modelSel').value,
+      targetLang: $('tgtLangSel').value,
+      sourceLang: $('srcLangSel').value,
+      promptId: $('promptSel').value,
+      think: !$('noThink').checked,
+    });
+    for (const row of rows) {
+      list.appendChild(Render.buildFindRow(row, {
+        onJump: (r2) => {
+          const card = r2.rid ? cards.get(r2.rid) : null;
+          if (card) {
+            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            card.classList.add('find-flash');
+            setTimeout(() => card.classList.remove('find-flash'), 2200);
+          } else {
+            flash('no card for this paragraph — use Edit or Re-translate');
+          }
+        },
+        onEdit: async (r2, tgt) => {
+          const res = await API.fixParagraph({ ...baseCfg(r2), tgt });
+          if (res && res.ok) { flash('saved — output rebuilt'); refreshOut(); setTimeout(runFind, 300); }
+          return res;
+        },
+        onRetrans: async (r2) => {
+          const model = $('modelSel').value;
+          if (!model) { flash('choose a model first'); return { error: 'no model chosen' }; }
+          const res = await API.fixParagraph({ ...baseCfg(r2), model });
+          if (res && res.ok) { flash(`re-translated with ${model} — output rebuilt`); refreshOut(); setTimeout(runFind, 300); }
+          return res;
+        },
+      }, q));
+    }
+  }
+  async function runFind() {
+    const q = ($('findInput').value || '').trim();
+    if (q.length < 2) {
+      $('findList').textContent = '';
+      $('findCount').textContent = '';
+      return;
+    }
+    try {
+      const r = await API.search(activeBook(), q, 100);
+      renderFindResults(r);
+    } catch (e) {
+      $('findList').textContent = '';
+      $('findCount').textContent = 'search failed — is the server running?';
+    }
+  }
+  $('findBtn').addEventListener('click', () => {
+    const panel = $('findPanel');
+    panel.hidden = !panel.hidden;
+    findOpen = !panel.hidden;
+    if (findOpen) {
+      $('findInput').focus();
+      runFind();
+    }
+  });
+  $('closeFind').addEventListener('click', () => { $('findPanel').hidden = true; findOpen = false; });
+  $('findInput').addEventListener('input', () => {
+    clearTimeout(findDebounce);
+    findDebounce = setTimeout(runFind, 250);
+  });
+  $('findInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { clearTimeout(findDebounce); runFind(); }
+  });
+
   // export/import book pack panel
   $('exportImportBtn').addEventListener('click', openTransfer);
   $('closeTransfer').addEventListener('click', () => { $('transferPanel').hidden = true; });
@@ -1476,12 +1575,29 @@
     importPackFile(f);
   });
 
+  // Show/hide markup placeholder tokens (⟦s0⟧ ⟦e0⟧ ⟦1⟧) in the feed cards and in
+  // the HTML export. Display-only: the raw tokens stay in the DOM (textContent),
+  // so edits/saves/replay still carry the markup either way. Preference is local.
+  function setMarkup(on) {
+    document.body.classList.toggle('show-markup', on);
+    const b = $('markupToggle');
+    if (b) { b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+  }
+
+  $('markupToggle').addEventListener('click', () => {
+    const on = !document.body.classList.contains('show-markup');
+    setMarkup(on);
+    localStorage.setItem('fountain-show-markup', on ? '1' : '0');
+  });
+
   // export the whole translation as one HTML table (English left, Persian right)
   $('exportTableBtn').addEventListener('click', () => {
     const book = activeBook();
     if (!book) { flash('choose a book first'); return; }
     const a = document.createElement('a');
-    a.href = '/api/export/html?book=' + encodeURIComponent(book);
+    let url = '/api/export/html?book=' + encodeURIComponent(book);
+    if (document.body.classList.contains('show-markup')) url += '&markup=1'; // keep ⟦…⟧ tokens in the export
+    a.href = url;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1509,6 +1625,8 @@
 
   // ---- glossary (persistent source name → target form, survives restarts) ----
   let glossaryCache = [];
+  let verifyNamesDefault = '';
+  let verifying = false;
 
   async function refreshGlossary() {
     const r = await API.glossary(activeBook());
@@ -1586,6 +1704,92 @@
       await refreshGlossary();
     } catch (e) {
       flash('auto-build failed');
+    }
+  });
+
+  // Build the book's name glossary up front so the user can review/fix names
+  // BEFORE translation starts (the review-first workflow). Reuses the same
+  // autobuild endpoint; a later Start finds nothing left to add.
+  $('buildNamesBtn').addEventListener('click', async () => {
+    const c = gatherConfig();
+    if (!c.book || !c.model) { flash('choose a book and model first'); return; }
+    const btn = $('buildNamesBtn');
+    if (btn) btn.disabled = true;
+    flash('building the name glossary…');
+    try {
+      const r = await API.autobuildGlossary(c);
+      if (r.error) { flash(r.error); return; }
+      // Open the Names panel so the user sees what was built and can fix it.
+      $('promptPanel').hidden = true;
+      $('glossaryPanel').hidden = false;
+      await refreshGlossary();
+      flash(`${r.added ? `added ${r.added} name${r.added === 1 ? '' : 's'}; ` : 'no new names; '}fix them here, then press Start`);
+    } catch (e) {
+      flash('could not build the glossary — is the model up?');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+
+  // ---- verify names: LLM pass over the glossary with the editable prompt ----
+  function summarizeVerify(r) {
+    const bits = [];
+    if (r.fixed) bits.push(`${r.fixed} fixed`);
+    if (r.removed) bits.push(`${r.removed} removed`);
+    if (r.kept) bits.push(`${r.kept} kept`);
+    const head = bits.join(', ') || 'no changes';
+    const names = (r.changes || [])
+      .filter((c) => !c.skipped && c.action !== 'keep')
+      .slice(0, 6)
+      .map((c) => (c.action === 'remove' ? `${c.name} → removed` : `${c.name} → ${c.tgt}`));
+    return names.length ? `${head} — ${names.join(', ')}` : head;
+  }
+  $('saveVerifyPrompt').addEventListener('click', async () => {
+    try {
+      await API.setSettings({ verifyNamesPrompt: $('verifyPrompt').value.trim() });
+      flash('verify prompt saved');
+    } catch (e) {
+      flash('could not save the verify prompt');
+    }
+  });
+  $('resetVerifyPrompt').addEventListener('click', async () => {
+    if (!verifyNamesDefault) { flash('no default verify prompt available'); return; }
+    $('verifyPrompt').value = verifyNamesDefault;
+    try {
+      await API.setSettings({ verifyNamesPrompt: verifyNamesDefault });
+      flash('verify prompt reset to default');
+    } catch (e) {
+      flash('could not reset the verify prompt');
+    }
+  });
+  $('verifyBtn').addEventListener('click', async () => {
+    if (verifying) return;
+    const c = gatherConfig();
+    if (!c.book || !c.model) { flash('choose a book and model first'); return; }
+    const btn = $('verifyBtn');
+    const prog = $('verifyProgress');
+    verifying = true;
+    btn.disabled = true;
+    if (prog) { prog.hidden = false; prog.textContent = 'verifying names…'; }
+    try {
+      const r = await API.verifyGlossary({
+        book: c.book,
+        model: c.model,
+        think: c.think,
+        sourceLang: c.sourceLang,
+        targetLang: c.targetLang,
+        prompt: $('verifyPrompt').value, // live value, so unsaved edits are honored
+      });
+      if (r.error) { flash(r.error); return; }
+      flash(summarizeVerify(r));
+      glossaryCache = r.entries || glossaryCache;
+      renderGlossary($('glossarySearch').value.trim().toLowerCase());
+    } catch (e) {
+      flash('verify failed — is the model running?');
+    } finally {
+      verifying = false;
+      btn.disabled = false;
+      if (prog) prog.hidden = true;
     }
   });
 

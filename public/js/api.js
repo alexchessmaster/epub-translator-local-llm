@@ -54,6 +54,12 @@ const API = (() => {
       if (limit != null) u += '&limit=' + limit;
       return get(u);
     },
+    search: (book, q, limit) => {
+      let u = '/api/search?book=' + encodeURIComponent(book) + '&q=' + encodeURIComponent(q);
+      if (limit != null) u += '&limit=' + limit;
+      return get(u);
+    },
+    rebuild: (book) => post('/api/rebuild', { book }),
     importPack: (blob) =>
       fetch('/api/book-pack', {
         method: 'POST',
@@ -78,6 +84,7 @@ const API = (() => {
       }).then((r) => r.json()),
     deleteGlossary: (src, book) => fetch(`/api/glossary/${encodeURIComponent(src)}` + q(book), { method: 'DELETE' }),
     autobuildGlossary: (cfg) => post('/api/glossary/autobuild', cfg),
+    verifyGlossary: (cfg) => post('/api/glossary/verify', cfg),
     settings: () => get('/api/settings'),
     setSettings: (s) =>
       fetch('/api/settings', {

@@ -16,13 +16,13 @@ const { JsonlLogger } = require('./lib/logger');
 const { ServerLog } = require('./lib/servelog');
 const { PromptStore } = require('./lib/prompts');
 const { GlossaryStore } = require('./lib/glossary');
-const { SettingsStore } = require('./lib/settings');
+const { SettingsStore, DEFAULTS } = require('./lib/settings');
 const { JobManager } = require('./lib/jobs');
 const { runFix, loadIssues } = require('./lib/fixer');
 const { fixParagraph, rebuildOutputs } = require('./lib/editor');
 const { BookLogs } = require('./lib/booklogs');
 const { buildPack, importPack } = require('./lib/bookpack');
-const { extractNames, buildGlossary, findCachePath, findCacheModel } = require('./lib/translator');
+const { extractNames, buildGlossary, verifyGlossary, buildGlossaryLineFor, findCacheModel, collectCaches, loadMerged } = require('./lib/translator');
 const { buildTableHtml, collectPairs } = require('./lib/exporttable');
 const sse = require('./lib/sse');
 
@@ -70,6 +70,38 @@ function safeJoin(base, name) {
   if (name.includes('..') || name.includes('/') || name.includes('\\')) return null;
   const p = path.join(base, name);
   return p.startsWith(base) ? p : null;
+}
+
+// Strip markup tokens + byte escapes for display (mirror of the frontend's clean()).
+const stripTokens = (s) => String(s || '').replace(/⟦[se]?\d+⟧/g, '');
+const displayText = (s) => stripTokens(String(s || '').replace(/<0x[0-9A-Fa-f]{2}>/g, ' '));
+
+// Normalize text for search matching: drop markup tokens and byte escapes, strip
+// Arabic/Persian diacritics (U+064B..U+065F) and tatweel (U+0640), collapse
+// whitespace, lowercase — so a query like "اشتر" finds "اَشْـتِـرْ".
+const AR_DIACRITICS_RE = /[ً-ٰٟـ]/g;
+function normText(s) {
+  return displayText(s)
+    .replace(AR_DIACRITICS_RE, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// Map<file, Map<src, tgt>> of the review tape's corrected targets (last fix wins).
+// The source of truth for what the feed shows; applied as an overlay so the merged
+// output always matches the feed even when a fix never landed in the cache.
+function tapeFixMap(entries) {
+  const fixes = new Map();
+  for (const e of entries) {
+    if (!e || e.t !== 'fix' || !e.data) continue;
+    const { file, src, tgt } = e.data;
+    if (file == null || src == null || tgt == null) continue;
+    let m = fixes.get(file);
+    if (!m) { m = new Map(); fixes.set(file, m); }
+    m.set(src, tgt);
+  }
+  return fixes;
 }
 
 const app = express();
@@ -233,8 +265,77 @@ app.post('/api/glossary/autobuild', wrap(async (req, res) => {
   res.json({ added, missing: missing.length, entries: [...users, ...autoStore.list()] });
 }));
 
+// Verify the current glossary (user + per-book auto entries) with the LLM using
+// the user-editable verify prompt. Decisions: keep / fix (new tgt) / remove.
+// Fixes apply to both user and auto entries; removals only to auto entries (a
+// ★ user-set name can be fixed but never silently deleted). Emits
+// `glossary-progress` SSE after each batch so the panel can show live progress.
+let verifying = false;
+app.post('/api/glossary/verify', wrap(async (req, res) => {
+  if (verifying) return res.status(409).json({ error: 'a glossary verify is already running' });
+  const { book, model, think, sourceLang, targetLang, prompt } = req.body || {};
+  const bookPath = safeJoin(BOOKS, book);
+  if (!bookPath || !fs.existsSync(bookPath)) return res.status(400).json({ error: 'book not found' });
+  if (!model) return res.status(400).json({ error: 'model required' });
+  const s = settings.get();
+  const srcLang = sourceLang || s.sourceLang || 'en';
+  const tgtLang = targetLang || s.targetLang || 'fa';
+  const verifyPrompt = (prompt && prompt.trim()) || s.verifyNamesPrompt || DEFAULTS.verifyNamesPrompt;
+  const autoStore = autoGlossary(book);
+  const users = glossary.list().filter((e) => e.source === 'user');
+  const entries = [...users, ...autoStore.list()];
+
+  verifying = true;
+  try {
+    if (!entries.length) return res.json({ fixed: 0, removed: 0, kept: 0, changes: [], entries: [] });
+    const { decisions } = await verifyGlossary(getProvider(settings), model, entries, {
+      think: !!think,
+      sourceLang: srcLang,
+      targetLang: tgtLang,
+      prompt: verifyPrompt,
+      onBatch: (done, total) => sse.broadcast('glossary-progress', { done, total }),
+    });
+    const byName = new Map(entries.map((e) => [e.src, e]));
+    let fixed = 0;
+    let removed = 0;
+    let kept = 0;
+    const changes = [];
+    for (const d of decisions) {
+      const entry = byName.get(d.name);
+      const change = { name: d.name, action: d.action, reason: d.reason || '' };
+      if (d.tgt) change.tgt = d.tgt;
+      if (d.skipped) change.skipped = d.skipped;
+      changes.push(change);
+      if (d.action === 'remove') {
+        if (entry && entry.source === 'auto') {
+          autoStore.remove(d.name);
+          removed += 1;
+        } else {
+          change.skipped = change.skipped || 'user';
+          kept += 1;
+        }
+      } else if (d.action === 'fix' && d.tgt) {
+        if (entry && entry.source === 'auto') autoStore.set(d.name, d.tgt, 'auto');
+        else glossary.set(d.name, d.tgt, 'user');
+        fixed += 1;
+      } else {
+        kept += 1;
+      }
+    }
+    const finalUsers = glossary.list().filter((e) => e.source === 'user');
+    res.json({ fixed, removed, kept, changes, entries: [...finalUsers, ...autoStore.list()] });
+  } finally {
+    verifying = false;
+  }
+}));
+
 // ---- settings (persistent, single source of truth) ----
-app.get('/api/settings', (req, res) => res.json({ ...settings.get(), effective: effectiveConfig(settings) }));
+app.get('/api/settings', (req, res) =>
+  res.json({
+    ...settings.get(),
+    effective: effectiveConfig(settings),
+    verifyNamesDefault: DEFAULTS.verifyNamesPrompt,
+  }));
 app.put('/api/settings', (req, res) => {
   const b = req.body || {};
   const patch = {};
@@ -252,6 +353,7 @@ app.put('/api/settings', (req, res) => {
   if (typeof b.lastModel === 'string') patch.lastModel = b.lastModel.trim();
   if (typeof b.lastFixModel === 'string') patch.lastFixModel = b.lastFixModel.trim();
   if (typeof b.lastPromptId === 'string') patch.lastPromptId = b.lastPromptId.trim();
+  if (typeof b.verifyNamesPrompt === 'string') patch.verifyNamesPrompt = b.verifyNamesPrompt.trim();
   if (b.lastFormat != null) {
     if (!['epub', 'docx', 'pdf'].includes(b.lastFormat)) return res.status(400).json({ error: 'lastFormat must be epub, docx or pdf' });
     patch.lastFormat = b.lastFormat;
@@ -416,11 +518,104 @@ app.get('/api/export/html', (req, res) => {
     sourceLang: meta.sourceLang || 'en',
     targetLang: meta.targetLang || 'fa',
     pairs: collectPairs(entries),
+    keepMarkup: req.query.markup === '1', // dashboard "show markup" toggle state
   });
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.set('Content-Disposition', `attachment; filename="${slug}-translation.html"`);
   res.send(html);
 });
+
+// ---- find: search a book's source, feed, and cache text; edit any paragraph ----
+// Searching the raw work/ cache (not the fix-overlaid view) is deliberate: that is
+// what is REALLY in the exported book, stale/garbage content included, so a user
+// who sees something odd in the file can locate it and fix it here.
+app.get('/api/search', wrap(async (req, res) => {
+  const book = req.query.book;
+  if (!book) return res.status(400).json({ error: 'book parameter is required' });
+  const q = normText(req.query.q);
+  if (q.length < 2) return res.json({ q: req.query.q, results: [], total: 0, truncated: false });
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 100));
+  const bookPath = safeJoin(BOOKS, book);
+  if (!bookPath || !fs.existsSync(bookPath)) return res.status(400).json({ error: 'book not found' });
+  const slug = bookLogs.slug(book);
+  const targetLang = req.query.targetLang || settings.get().targetLang || 'fa';
+
+  // Feed-effective targets (fixes last-wins) + request metadata from the tape.
+  const entries = bookLogs.readReview(slug);
+  const fixes = tapeFixMap(entries);
+  const feed = new Map(); // file+'\0'+src -> { tgt, rid, model }
+  const reqById = new Map();
+  for (const e of entries) {
+    if (!e || !e.data) continue;
+    if (e.t === 'request') reqById.set(e.data.id, e.data);
+    else if (e.t === 'response' && Array.isArray(e.data.pairs)) {
+      const info = reqById.get(e.data.id) || {};
+      const fx = fixes.get(info.file);
+      for (const p of e.data.pairs) {
+        if (!p || p.src == null || p.tgt == null) continue;
+        feed.set((info.file || '') + '\0' + p.src, {
+          tgt: (fx && fx.get(p.src)) || p.tgt,
+          rid: e.data.id,
+          model: info.model,
+        });
+      }
+    }
+  }
+
+  const bookData = await epub.readEpub(bookPath);
+  const files = epub.listTextFiles(bookData.entries, bookData.buffers);
+  const results = [];
+  for (const file of files) {
+    const buf = bookData.buffers.get(file);
+    if (!buf) continue;
+    const parsed = new epub.UnitExtractor().walk(buf.toString('utf8'));
+    // Raw merged cache (no fix overlay) = what the exported book actually contains.
+    const merged = loadMerged({ bookData, bookName: book, targetLang, file, workDir: WORK });
+    const caches = collectCaches(WORK, book, targetLang, file);
+    const cacheModel = caches.length ? caches[0].model : null;
+    for (const u of parsed.units) {
+      const srcClean = displayText(u.flat);
+      const tgtCache = merged ? merged.slotContent.get(u.slot) || null : null;
+      const tgtCacheDisplay = displayText(tgtCache || '').replace(/<[^>]*>/g, ' '); // strip restored markup tags
+      const feedRec = feed.get(file + '\0' + u.flat);
+      const tgtFeed = feedRec ? feedRec.tgt : null;
+      const tgtClean = displayText(tgtFeed || tgtCache || u.flat);
+      if (!normText(srcClean).includes(q) && !normText(tgtCacheDisplay).includes(q) && !normText(tgtClean).includes(q)) continue;
+      results.push({
+        file,
+        slot: u.slot,
+        src: u.flat,
+        srcClean,
+        tgtFeed,
+        tgtCache: tgtCacheDisplay.trim(),
+        tgtClean,
+        targetLang,
+        hasCard: !!feedRec,
+        rid: feedRec ? feedRec.rid : null,
+        model: feedRec ? feedRec.model : null,
+        cacheModel,
+      });
+      if (results.length >= limit) break;
+    }
+    if (results.length >= limit) break;
+  }
+  res.json({ q: req.query.q, total: results.length, truncated: results.length >= limit, results });
+}));
+
+// Rebuild the output book(s) from the MERGED caches with zero model calls — lets
+// the user re-export a clean book anytime (and repairs this book's output).
+app.post('/api/rebuild', wrap(async (req, res) => {
+  if (jobs.isRunning()) return res.status(409).json({ error: 'a translation is running' });
+  const { book, targetLang } = req.body || {};
+  const bookPath = safeJoin(BOOKS, book);
+  if (!bookPath || !fs.existsSync(bookPath)) return res.status(400).json({ error: 'book not found' });
+  const tgtLang = targetLang || settings.get().targetLang || 'fa';
+  const bookName = path.basename(bookPath);
+  const bookData = await epub.readEpub(bookPath);
+  const fixes = tapeFixMap(bookLogs.readReview(bookLogs.slug(bookName)));
+  const rebuilt = await rebuildOutputs({ bookData, bookName, targetLang: tgtLang, workDir: WORK, outDir: OUT, fixes });
+  res.json({ ok: true, files: rebuilt.files });
+}));
 
 // ---- fix pass ----
 let fixing = false;
@@ -452,6 +647,8 @@ app.post('/api/fix', wrap(async (req, res) => {
       provider,
       sourceLang: srcLang,
       targetLang: tgtLang,
+      // Fixes must use the current glossary too (not the run-start snapshot).
+      glossaryLine: buildGlossaryLineFor(glossary, autoGlossary(book), prompt.glossaryLimit),
     });
     const fixedItems = r.fixedItems || [];
     if (fixedItems.length) {
@@ -480,7 +677,7 @@ app.post('/api/fix', wrap(async (req, res) => {
                 ts: new Date().toISOString(),
                 file: item.file,
                 src: item.src,
-                tgt: ok ? res.tgt : item.tgt, // display form either way
+                tgt: ok ? res.tgt : item.rawTgt, // RAW (tokens intact) — feed/overlay render toggle-controlled
                 model: cacheModel,
                 targetLang: tgtLang,
               },
@@ -490,16 +687,13 @@ app.post('/api/fix', wrap(async (req, res) => {
       }
       if (lastModel && wrote) {
         try {
-          // Rebuild only when the resolved model's cache covers everything that any
-          // model cached — otherwise a partial cache could overwrite a good output
-          // with mixed English/Persian. Untranslated chapters (no cache at all) are
-          // fine: they fall back to the source either way.
-          const files = epub.listTextFiles(bookData.entries, bookData.buffers);
-          const covered = files.every((f) => {
-            if (!findCacheModel(WORK, bookName, tgtLang, f)) return true; // never cached — fine
-            return !!findCachePath(bookName, lastModel, tgtLang, f, WORK);
+          // Merged rebuild across ALL models' caches (with the tape's fixes
+          // overlaid) — a partial cache can never overwrite a good output with
+          // English again.
+          await rebuildOutputs({
+            bookData, bookName, targetLang: tgtLang, workDir: WORK, outDir: OUT,
+            fixes: bookSlug ? tapeFixMap(bookLogs.readReview(bookSlug)) : undefined,
           });
-          if (covered) await rebuildOutputs({ bookData, bookName, model: lastModel, targetLang: tgtLang, workDir: WORK, outDir: OUT });
         } catch (e) { /* rebuild is best-effort */ }
       }
     }
@@ -546,6 +740,8 @@ app.post('/api/paragraph/fix', wrap(async (req, res) => {
     manualTgt: typeof tgt === 'string' ? tgt : null,
     workDir: WORK,
     issues: bookSlug ? bookLogs.issuesLogger(bookSlug) : issuesLog,
+    // Re-translates must use the current glossary (not a stale snapshot).
+    glossaryLine: buildGlossaryLineFor(glossary, autoGlossary(book), prompt.glossaryLimit),
   });
   // Record the fix in the review tape so a later import shows the corrected
   // translation (review fixes persist across sessions).
@@ -559,6 +755,7 @@ app.post('/api/paragraph/fix', wrap(async (req, res) => {
           src,
           tgt: result.tgt,
           model: cacheModel,
+          promptId: prompt.id || promptId,
           targetLang: tgtLang,
         },
       });
@@ -569,10 +766,10 @@ app.post('/api/paragraph/fix', wrap(async (req, res) => {
   const rebuilt = await rebuildOutputs({
     bookData,
     bookName: path.basename(bookPath),
-    model: cacheModel,
     targetLang: tgtLang,
     workDir: WORK,
     outDir: OUT,
+    fixes: bookSlug ? tapeFixMap(bookLogs.readReview(bookSlug)) : undefined,
   });
   res.json({ ok: true, tgt: result.tgt, files: rebuilt.files });
 }));

@@ -3,7 +3,7 @@
 const Stream = (() => {
   const EVENTS = [
     'connected', 'job', 'queue', 'request', 'token', 'think', 'response', 'progress',
-    'file', 'done', 'error', 'glossary', 'log', 'fix', 'fix-done',
+    'file', 'done', 'error', 'glossary', 'glossary-progress', 'log', 'fix', 'fix-done',
   ];
 
   function connect(handlers) {
