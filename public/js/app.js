@@ -5,6 +5,11 @@
 
   const $ = (id) => document.getElementById(id);
   const cards = new Map(); // request id -> card element
+  // 'file\0src' -> corrected tgt, last fix wins. Collected while a book's tape
+  // replays and applied as an overlay once the whole tape is loaded, so a fix is
+  // never clobbered by a later re-request of the same paragraph (mirrors the
+  // server's tapeFixMap / overlayReviewFixes last-wins semantics).
+  const fixOverlay = new Map();
   const thinkBlocks = new Map(); // request id -> think block element
   const thinkMeta = new Map();   // request id -> { file, model }
   let runThinkDisabled = false;  // noThink captured at run start (job's think is fixed)
@@ -800,6 +805,7 @@
       // card in place and drop it from the flagged map so the chip clears live.
       if (!ev || ev.status !== 'fixed' || !ev.file || !ev.src) return;
       const key = ev.file + '\0' + ev.src;
+      if (ev.tgt != null) fixOverlay.set(key, ev.tgt); // keep the live overlay in sync
       if (issueMap.delete(key)) {
         issueCount = Math.max(0, issueCount - 1);
         $('statIssues').textContent = issueCount;
@@ -850,10 +856,29 @@
         const c = cards.get(e.data.id);
         if (c) Render.errorCard(c, e.data.message);
       } else if (e.t === 'fix') {
+        // Collect for the final last-wins overlay (the tape is interleaved — a fix
+        // can sit before a later response for the same paragraph). Also apply
+        // inline for the live .fixed indicator; the final overlay re-applies the
+        // true last fix once the whole tape is in, so no ordering can win wrongly.
+        if (e.data && e.data.file != null && e.data.src != null && e.data.tgt != null) {
+          fixOverlay.set(e.data.file + '\0' + e.data.src, e.data.tgt);
+        }
         cards.forEach((card) => Render.applyFix(card, e.data));
       }
     }
     return n;
+  }
+
+  // Apply the collected last-wins fix overlay to every card. Must run only after
+  // the tape has been fully replayed so later fixes are not lost to earlier ones
+  // and a fix is not clobbered by a re-request that resolved before it.
+  function applyFixOverlay() {
+    for (const [key, tgt] of fixOverlay) {
+      const sep = key.indexOf('\0');
+      if (sep <= 0 || sep >= key.length - 1) continue;
+      const fix = { file: key.slice(0, sep), src: key.slice(sep + 1), tgt };
+      cards.forEach((card) => Render.applyFix(card, fix));
+    }
   }
 
   function renderLoadMore() {
@@ -883,6 +908,7 @@
     const entries = (data && data.entries) || [];
     if (data && data.total != null) reviewTotal = data.total;
     replayEntries(entries);
+    applyFixOverlay(); // re-apply so fixes from this page win over earlier responses
     reviewOffset += entries.length;
     await refreshIssues();
     renderLoadMore();
@@ -897,6 +923,7 @@
     const PAGE = 2000; // server caps limit at 2000 — fetch everything in few pages
     $('feed').textContent = '';
     cards.clear();
+    fixOverlay.clear();
 
     let total = 0;
     let n = 0;
@@ -937,6 +964,7 @@
     } while (entries.length && offset < total);
 
     window.__dbg.at = 'loop-done';
+    applyFixOverlay(); // after all pages: apply every fix, last wins
     reviewOffset = offset; // = total once fully loaded → no "Load more" button
     reviewTotal = total;
     try { await refreshIssues(); window.__dbgA = 'issues-ok'; } catch (e) { window.__dbgA = 'issues-ERR ' + e; }

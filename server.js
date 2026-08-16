@@ -104,6 +104,34 @@ function tapeFixMap(entries) {
   return fixes;
 }
 
+// Build a per-entry transformer that overlays the tape's last-wins fixes onto
+// response pairs. Response records carry only an `id`; the request record for
+// that id supplies the chapter `file`, so fixes match by (file, src) exactly
+// like tapeFixMap / loadMerged. This makes the replayed feed show the corrected
+// text no matter where a fix sits in the interleaved tape — a fix can precede a
+// later re-request of the same paragraph, and without this overlay that later
+// response would clobber the fix on replay.
+function overlayReviewFixes(all) {
+  const fileById = new Map();
+  for (const e of all) {
+    if (e && e.t === 'request' && e.data && e.data.id != null && e.data.file != null) {
+      fileById.set(e.data.id, e.data.file);
+    }
+  }
+  const fixes = tapeFixMap(all);
+  return (e) => {
+    if (!e || e.t !== 'response' || !e.data || !Array.isArray(e.data.pairs)) return e;
+    const file = fileById.get(e.data.id);
+    const perFile = file != null ? fixes.get(file) : null;
+    if (!perFile || !perFile.size) return e;
+    const pairs = e.data.pairs.map((p) => {
+      if (p && p.src != null && perFile.has(p.src)) return { ...p, tgt: perFile.get(p.src) };
+      return p;
+    });
+    return { ...e, data: { ...e.data, pairs } };
+  };
+}
+
 const app = express();
 app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(APP_DIR, 'public'), { cacheControl: false }));
@@ -456,6 +484,7 @@ app.get('/api/review', (req, res) => {
   const meta = bookLogs.metaFromEntries(all);
   const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
   const limit = Math.min(2000, Math.max(1, parseInt(req.query.limit, 10) || 200));
+  const applyFixes = overlayReviewFixes(all);
   res.json({
     book: meta.book || book,
     model: meta.model || null,
@@ -465,7 +494,7 @@ app.get('/api/review', (req, res) => {
     total: all.length,
     offset,
     limit,
-    entries: all.slice(offset, offset + limit),
+    entries: all.slice(offset, offset + limit).map(applyFixes),
   });
 });
 
